@@ -2,5 +2,5 @@
   // Configuración para publicar el sitio estático en Cloudflare (Workers & Pages)
   "name": "tallerdefedeapp",
   "compatibility_date": "2025-01-01",
-  "assets": { "directory": "./public" }
+  "assets": { "directory": "./docs" }
 }

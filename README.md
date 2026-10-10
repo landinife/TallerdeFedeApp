@@ -5,9 +5,17 @@ Es un sitio estático: no necesita instalar ni compilar nada.
 
 ## Archivos
 
-- `public/index.html`: toda la app (pantallas, cálculos y armado del PDF).
-- `public/manifest.webmanifest` y `public/icons/`: nombre e icono para instalarla en el teléfono.
-- `wrangler.jsonc`: le indica a Cloudflare que publique la carpeta `public`.
+- `docs/index.html`: toda la app (pantallas, cálculos y armado del PDF).
+- `docs/manifest.webmanifest` y `docs/icons/`: nombre e icono para instalarla en el teléfono.
+- `wrangler.jsonc`: le indica a Cloudflare que publique la carpeta `docs`.
+
+## Publicarla con GitHub Pages
+
+1. El repositorio tiene que ser público (plan gratuito de GitHub).
+2. Configuración (Settings) > Pages > Rama (Branch): `main`, carpeta `/docs` > Guardar (Save).
+3. La app queda en `https://landinife.github.io/TallerdeFedeApp/`.
+
+Cada versión nueva que se sube al repositorio se publica sola en uno o dos minutos.
 
 ## Publicarla en Cloudflare
 
