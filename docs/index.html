@@ -116,6 +116,8 @@ details.job>summary::-webkit-details-marker{display:none}
 .bar.on .bf{opacity:1}
 .bl{font-size:12.5px;border-top:1px solid var(--line);padding-top:4px;text-align:center}
 .bar.on .bl{color:var(--fg);font-weight:600}
+.hbar{height:14px;background:var(--sunken);border-radius:4px;overflow:hidden}
+.hbar span{display:block;height:100%;border-radius:4px}
 .swatches{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .sw{width:44px;height:44px;border-radius:50%;border:3px solid var(--surface);outline:1px solid var(--line);cursor:pointer}
 .cli{display:flex;justify-content:space-between;gap:10px;align-items:center;border-top:1px solid var(--line);padding-top:10px}
@@ -163,6 +165,7 @@ details.job>summary::-webkit-details-marker{display:none}
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script>
 'use strict';
 /* ============ Utilidades ============ */
@@ -331,8 +334,8 @@ function calcPre(p) {
 }
 const r2 = n => Math.round(n * 100) / 100;
 const newRow = k => k === 'mat' ? {desc: '', cant: '', costo: '', moneda: 'ARS', modo: 'no'} : {desc: '', horas: '', costo: numStr(S.cfg.hh), moneda: S.cfg.hhMoneda || 'ARS', modo: 'no'};
-const newCot = () => ({id: null, pv: pad(S.cfg.pv, 4), num: pad(S.cfg.prox, 6), fecha: today(), cliente: {razon: '', cuit: '', tel: '', dir: ''}, nombre: '', mat: [newRow('mat')], mo: [newRow('mo')], margen: '30', extras: [], incMat: true, iva: false, ivaPct: String(S.cfg.ivaPct || '21'), validez: '', pago: '', plazo: '', obs: ''});
-const cotVacia = c => !c.id && !c.nombre && !c.cliente.razon && !c.extras.length && !(calcCot(c).precio > 0);
+const newCot = () => ({id: null, pv: pad(S.cfg.pv, 4), num: pad(S.cfg.prox, 6), fecha: today(), cliente: {razon: '', cuit: '', tel: '', dir: ''}, nombre: '', mat: [newRow('mat')], mo: [newRow('mo')], margen: '30', extras: [], incMat: true, iva: false, ivaPct: String(S.cfg.ivaPct || '21'), validez: '', pago: '', plazo: '', obs: '', adj: []});
+const cotVacia = c => !c.id && !c.nombre && !c.cliente.razon && !c.extras.length && !(c.adj || []).length && !(calcCot(c).precio > 0);
 /* Lo que ve el cliente: cada renglón del cotizador queda dentro del precio, se menciona como incluido o se detalla aparte con su precio. */
 function cotItems(c) {
   const k = calcCot(c), f = 1 + parseNum(c.margen) / 100, items = [], menc = [];
@@ -359,7 +362,7 @@ function cotItems(c) {
 }
 function jobFromCot(c) {
   const items = cotItems(c), sub = r2(items.reduce((a, i) => a + i.total, 0)), pct = parseNum(c.ivaPct) || 21, ivaMonto = c.iva ? r2(sub * pct / 100) : 0;
-  return {id: c.id, pv: pad(c.pv, 4), num: pad(c.num, 6), fecha: c.fecha || today(), cliente: clone(c.cliente), items, iva: !!c.iva, ivaPct: pct, validez: c.validez, pago: c.pago, plazo: c.plazo, obs: c.obs, sub, ivaMonto, total: r2(sub + ivaMonto), src: clone(c)};
+  return {id: c.id, pv: pad(c.pv, 4), num: pad(c.num, 6), fecha: c.fecha || today(), cliente: clone(c.cliente), items, iva: !!c.iva, ivaPct: pct, validez: c.validez, pago: c.pago, plazo: c.plazo, obs: c.obs, adj: clone(c.adj || []), sub, ivaMonto, total: r2(sub + ivaMonto), src: clone(c)};
 }
 function draftFromJob(j) {
   if (j.src && j.src.mat) return Object.assign(newCot(), clone(j.src), {id: j.id});
@@ -447,7 +450,7 @@ function buildPages(j, cfg) {
   Rc(124, y, 70, 11, ac);
   T('TOTAL', 127, y + 7.2, 11, {bold: 1, color: onAc}); T(money(j.total), R - 3, y + 7.2, 12, {bold: 1, color: onAc, align: 'right'});
   y += 11;
-  const cond = [['Validez', j.validez], ['Forma de pago', j.pago], ['Plazo de entrega', j.plazo], ['Observaciones', j.obs]].filter(p => String(p[1] || '').trim());
+  const cond = [['Validez', j.validez], ['Forma de pago', j.pago], ['Plazo de entrega', j.plazo], ['Observaciones', j.obs], ['Planos adjuntos', (j.adj || []).map(a => a.nombre).join(', ')]].filter(p => String(p[1] || '').trim());
   if (cond.length) {
     if (y + 16 > BOTTOM) page(false);
     y += 10; T('CONDICIONES', M, y, 7.5, {bold: 1, color: mute}); y += 5.5;
@@ -503,6 +506,47 @@ async function saveFile(filename, blob) {
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   return true;
 }
+/* Planos adjuntos: el archivo se guarda en partes (adjuntos/<id>-<n>) y se suma al PDF a continuación del presupuesto */
+const ADJ_MAX = 8 * 1024 * 1024, adjCache = {};
+function b64DeBytes(u8) { let t = ''; for (let i = 0; i < u8.length; i += 0x8000) t += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(t); }
+function bytesDeB64(b) { const t = atob(b), u = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) u[i] = t.charCodeAt(i); return u; }
+async function adjGuardar(file) {
+  const u8 = new Uint8Array(await file.arrayBuffer()), id = uid(), b = b64DeBytes(u8), parte = (window.claude && window.claude.use) ? 180000 : 600000, n = Math.ceil(b.length / parte);
+  if (db) for (let i = 0; i < n; i++) await db.doc('adjuntos/' + id + '-' + i).set({d: b.slice(i * parte, (i + 1) * parte)});
+  adjCache[id] = u8;
+  return {id, nombre: file.name, bytes: u8.length, partes: n, tipo: file.type || ''};
+}
+async function adjLeer(a) {
+  if (adjCache[a.id]) return adjCache[a.id];
+  if (!db) throw new Error('sin nube');
+  let b = '';
+  for (let i = 0; i < a.partes; i++) { const d = await db.doc('adjuntos/' + a.id + '-' + i).get(); if (!d.exists) throw new Error('falta parte'); b += d.data().d; }
+  return (adjCache[a.id] = bytesDeB64(b));
+}
+async function adjBorrar(a) {
+  if (S.trabajos.some(t => (t.adj || []).some(x => x.id === a.id)) || (D.cot.adj || []).some(x => x.id === a.id)) return;
+  delete adjCache[a.id];
+  if (db) for (let i = 0; i < a.partes; i++) { try { await db.doc('adjuntos/' + a.id + '-' + i).delete(); } catch (e) {} }
+}
+const esPdf = a => /pdf/i.test(a.tipo) || /\.pdf$/i.test(a.nombre);
+async function conAdjuntos(blob, job) {
+  const adj = job.adj || [];
+  if (!adj.length) return blob;
+  if (!window.PDFLib) throw new Error('nolib');
+  const L = window.PDFLib, out = await L.PDFDocument.load(await blob.arrayBuffer()), font = await out.embedFont(L.StandardFonts.Helvetica);
+  const sello = ('Adjunto al presupuesto ' + job.pv + ' - ' + job.num + '  ·  ' + job.cliente.razon).replace(/[^\x20-\x7E\xA0-\xFF]/g, '');
+  for (const a of adj) {
+    const bytes = await adjLeer(a); let pags;
+    if (esPdf(a)) { const src = await L.PDFDocument.load(bytes, {ignoreEncryption: true}); pags = await out.copyPages(src, src.getPageIndices()); pags.forEach(p => out.addPage(p)); }
+    else {
+      const img = (/png/i.test(a.tipo) || /\.png$/i.test(a.nombre)) ? await out.embedPng(bytes) : await out.embedJpg(bytes);
+      const W = 595.28, H = 841.89, m = 28, k = Math.min((W - 2 * m) / img.width, (H - 2 * m - 14) / img.height), w = img.width * k, h = img.height * k, p = out.addPage([W, H]);
+      p.drawImage(img, {x: (W - w) / 2, y: (H - 14 - h) / 2, width: w, height: h}); pags = [p];
+    }
+    pags.forEach(p => { try { p.drawText(sello, {x: 14, y: p.getSize().height - 12, size: 7.5, font, color: L.rgb(.35, .38, .42)}); } catch (e) {} });
+  }
+  return new Blob([await out.save()], {type: 'application/pdf'});
+}
 let PV = null;
 const fileName = j => ('PTO ' + parseInt(j.pv, 10) + '-' + parseInt(j.num, 10) + ' ' + j.cliente.razon).replace(/[\\/:*?"<>|]/g, '').trim() + '.pdf';
 function paint(box, job) {
@@ -519,6 +563,7 @@ async function outPdf(job, share) {
   const name = fileName(job);
   let blob;
   try { blob = makePdf(buildPages(job, S.cfg), name.replace(/\.pdf$/, '')); } catch (e) { return toast('No se pudo generar el PDF. Revisá la conexión y volvé a intentar.'); }
+  if ((job.adj || []).length) { toast('Sumando los planos adjuntos…'); try { blob = await conAdjuntos(blob, job); } catch (e) { return toast('No se pudieron sumar los planos adjuntos al PDF. Revisá la conexión y volvé a intentar.'); } }
   if (share) {
     try {
       const file = new File([blob], name, {type: 'application/pdf'});
@@ -568,6 +613,9 @@ function viewCot() {
     '<div class="hint' + (viejo || !S.cfg.dolar ? ' warn' : '') + '">' + (!S.cfg.dolar ? 'Cargá el valor del dólar en Configuración para convertir los renglones en US$.' : 'Valor del ' + fechaCorta(S.cfg.dolarFecha) + (viejo ? '. Tiene más de 7 días: actualizalo en Configuración.' : '.')) + '</div>' +
     '<div class="sum" id="cotSum"></div></div>' +
     '<div class="card"><h2>Otros ítems a precio directo</h2><div class="hint">Para trabajos que no necesitás costear: escribí la descripción y el precio, y salen tal cual en el presupuesto.</div>' + c.extras.map(extra).join('') + '<button class="btn sm" data-act="add-row" data-k="extras">Agregar ítem</button></div>' +
+    '<div class="card"><h2>Planos adjuntos</h2><div class="hint">El plano o la foto que mandó el cliente sale a continuación del presupuesto, en el mismo PDF, con el número de presupuesto marcado en cada hoja.</div>' +
+    (c.adj || []).map((a, i) => '<div class="cli"><div><b>' + esc(a.nombre) + '</b><small>' + (esPdf(a) ? 'PDF' : 'Imagen') + ' · ' + (a.bytes / 1048576).toLocaleString('es-AR', {maximumFractionDigits: 1}) + ' MB</small></div><button class="ico" data-act="adj-del" data-i="' + i + '" aria-label="Quitar adjunto">' + TRASH + '</button></div>').join('') +
+    '<label class="f"><span>Agregar PDF o foto (hasta 8 MB cada uno)</span><input type="file" id="fileAdj" accept="application/pdf,image/jpeg,image/png" multiple></label></div>' +
     '<div class="card"><h2>Total para el cliente</h2><label class="chk"><input type="checkbox" id="i-cot-iva" data-m="cot.iva"' + (c.iva ? ' checked' : '') + '><span>Discriminar IVA (se suma al subtotal)</span></label>' +
     (c.iva ? '<label class="f"><span>Alícuota</span><select id="i-cot-ivaPct" data-m="cot.ivaPct"><option value="21"' + (parseNum(c.ivaPct) !== 10.5 ? ' selected' : '') + '>21 %</option><option value="10,5"' + (parseNum(c.ivaPct) === 10.5 ? ' selected' : '') + '>10,5 %</option></select></label>' : '') +
     '<div class="sum" id="cliSum"></div></div>' +
@@ -590,7 +638,8 @@ function viewPre() {
   return '<h1>Presupuesto ' + j.pv + ' - ' + j.num + '</h1>' +
     (ask ? '<div class="card"><b>¿Lo guardo ya en el Historial?</b><div class="hint">Queda como Presupuestado y empieza a contar en las métricas.</div><div class="btns"><button class="btn sm pri" data-act="ask-save">Sí, guardar</button><button class="btn sm" data-act="ask-no">Todavía no</button></div></div>' : '') +
     (!j.cliente.razon.trim() ? '<div class="hint warn">Falta el cliente: cargalo en el Cotizador antes de enviarlo.</div>' : '') +
-    '<div class="hint">Así lo ve el cliente. Para cambiar algo, volvé al Cotizador.</div><div class="sheet" id="sheet"></div>';
+    '<div class="hint">Así lo ve el cliente. Para cambiar algo, volvé al Cotizador.</div><div class="sheet" id="sheet"></div>' +
+    ((j.adj || []).length ? '<div class="card"><b>A continuación, en el mismo PDF</b><div class="items">' + j.adj.map(a => '<div><span>' + esc(a.nombre) + '</span><span>' + (esPdf(a) ? 'PDF' : 'Imagen') + '</span></div>').join('') + '</div><div class="hint">Los planos no se muestran acá: se ven al descargar o compartir el PDF.</div></div>' : '');
 }
 function viewHis() {
   const sum = e => S.trabajos.filter(t => e.includes(t.estado)).reduce((a, t) => a + (t.total || 0), 0);
@@ -627,13 +676,43 @@ function fechaEvento(t, key) {
   if (!f) { const x = h.find(q => eIdx(q.e) >= ix); f = x ? x.f : (t.fecha || ''); }
   return f;
 }
+function viewMetCli() {
+  const key = D.ui.cliMet || 'confirmado', per = D.ui.cliPer || '12', hoy = new Date();
+  const d12 = new Date(hoy.getFullYear(), hoy.getMonth() - 11, 1);
+  const desde = per === 'todo' ? '' : per === 'anio' ? hoy.getFullYear() + '-01-01' : d12.getFullYear() + '-' + String(d12.getMonth() + 1).padStart(2, '0') + '-01';
+  const g = {};
+  S.trabajos.forEach(t => {
+    const k = String(t.cliente.cuit || '').replace(/\D/g, '') || t.cliente.razon.trim().toLowerCase();
+    const o = g[k] || (g[k] = {nombre: t.cliente.razon.trim(), m: 0, c: 0, pres: 0, conf: 0});
+    if (!desde || (t.fecha || '') >= desde) { o.pres++; if (eIdx(t.estado) >= 1) o.conf++; }
+    const f = fechaEvento(t, key);
+    if (f && (!desde || f >= desde)) { o.m += t.total || 0; o.c++; }
+  });
+  const todos = Object.keys(g).map(k => g[k]).filter(o => o.m > 0).sort((a, b) => b.m - a.m), total = todos.reduce((a, o) => a + o.m, 0);
+  const top = todos.slice(0, 10), resto = todos.slice(10);
+  if (resto.length) top.push({nombre: 'Otros ' + resto.length + ' clientes', m: resto.reduce((a, o) => a + o.m, 0), c: resto.reduce((a, o) => a + o.c, 0), otros: true});
+  const max = top.length ? Math.max.apply(null, top.map(o => o.m)) : 0;
+  const op = (v, cur, txt) => '<option value="' + v + '"' + (v === cur ? ' selected' : '') + '>' + txt + '</option>';
+  const nom = {presupuestado: 'presupuestado', confirmado: 'confirmado', cobrado: 'cobrado'}[key];
+  return '<div class="g2"><label class="f"><span>Comparar por</span><select id="selCliMet" data-chg="cliMet">' + op('presupuestado', key, 'Lo presupuestado') + op('confirmado', key, 'Lo confirmado') + op('cobrado', key, 'Lo cobrado') + '</select></label>' +
+    '<label class="f"><span>Período</span><select id="selCliPer" data-chg="cliPer">' + op('12', per, 'Últimos 12 meses') + op('anio', per, 'Este año') + op('todo', per, 'Todo el historial') + '</select></label></div>' +
+    (!top.length ? '<div class="card empty">Todavía no hay trabajos con monto ' + nom + ' en este período.</div>' :
+      '<div class="card"><div class="job-l1"><b>Total ' + nom + '</b><span>' + money(total) + '</span></div>' + top.map((o, i) =>
+        '<div class="row"><div class="job-l1"><b>' + (o.otros ? '' : (i + 1) + '. ') + esc(o.nombre) + '</b><span>' + money(o.m) + '</span></div>' +
+        '<div class="hbar"><span style="width:' + Math.max(o.m / max * 100, 1.5) + '%;background:var(--e-' + key + ')"></span></div>' +
+        '<div class="hint">' + qty(o.m / total * 100) + ' % del total · ' + o.c + (o.c === 1 ? ' trabajo' : ' trabajos') + ' · promedio ' + money(o.m / o.c) +
+        (!o.otros && key !== 'presupuestado' && o.pres ? ' · confirmó ' + o.conf + ' de ' + o.pres + (o.pres === 1 ? ' presupuesto' : ' presupuestos') : '') + '</div></div>').join('') + '</div>');
+}
 function viewMet() {
+  const vista = D.ui.metVista || 'mes';
+  const tabs = '<h1>Métricas</h1><div class="chips"><button class="chip" data-act="met-vista" data-v="mes" aria-pressed="' + (vista === 'mes') + '">Por mes</button><button class="chip" data-act="met-vista" data-v="cli" aria-pressed="' + (vista === 'cli') + '">Por cliente</button></div>';
+  if (vista === 'cli') return tabs + (S.trabajos.length ? viewMetCli() : '<div class="card empty">Cuando guardes presupuestos, acá vas a ver cuánto representa cada cliente en pesos.</div>');
   const n = D.ui.metN || 6, modo = D.ui.metModo || 'monto', now = new Date(), meses = [];
   for (let i = n - 1; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); meses.push({k: d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'), lab: d.toLocaleDateString('es-AR', {month: 'short'}).replace('.', ''), full: d.toLocaleDateString('es-AR', {month: 'long', year: 'numeric'})}); }
   const corto = v => modo !== 'monto' ? String(v) : v >= 1e6 ? (v / 1e6).toLocaleString('es-AR', {maximumFractionDigits: 1}) + ' M' : v >= 1e3 ? Math.round(v / 1e3) + ' k' : String(Math.round(v));
   const chip = (act, v, cur, txt) => '<button class="chip" data-act="' + act + '" data-v="' + v + '" aria-pressed="' + (String(cur) === String(v)) + '">' + txt + '</button>';
   const data = METR.map(m => { const vals = meses.map(() => ({c: 0, m: 0})); S.trabajos.forEach(t => { const i = meses.findIndex(x => fechaEvento(t, m[0]).slice(0, 7) === x.k); if (i >= 0) { vals[i].c++; vals[i].m += t.total || 0; } }); return vals; });
-  const head = '<h1>Métricas</h1><div class="chips">' + chip('met-modo', 'monto', modo, 'En pesos') + chip('met-modo', 'cant', modo, 'Cantidad de trabajos') + chip('met-n', 6, n, '6 meses') + chip('met-n', 12, n, '12 meses') + '</div>';
+  const head = tabs + '<div class="chips">' + chip('met-modo', 'monto', modo, 'En pesos') + chip('met-modo', 'cant', modo, 'Cantidad de trabajos') + chip('met-n', 6, n, '6 meses') + chip('met-n', 12, n, '12 meses') + '</div>';
   if (!S.trabajos.length) return head + '<div class="card empty">Cuando guardes presupuestos y les vayas cambiando el estado en el Historial, acá vas a ver cuántos se presupuestaron, confirmaron, terminaron, facturaron y cobraron cada mes.</div>';
   return head + METR.map((m, mi) => {
     const vals = data[mi], v = vals.map(x => modo === 'monto' ? x.m : x.c), max = Math.max.apply(null, v.concat([0]));
@@ -750,6 +829,8 @@ const ACT = {
   'del-row': b => { D.cot[b.dataset.k].splice(+b.dataset.i, 1); render(); saveLocal(); },
   'cot-new': b => { if (!cotVacia(D.cot) && !armed(b)) return; D.cot = newCot(); render(); window.scrollTo(0, 0); saveLocal(); },
   'cot-save': () => { saveCot(false); },
+  'adj-del': b => { const a = D.cot.adj.splice(+b.dataset.i, 1)[0]; D.ui.skipAsk = false; render(); saveLocal(); if (a) adjBorrar(a); },
+  'met-vista': b => { D.ui.metVista = b.dataset.v; render(); },
   'ask-save': () => { saveCot(false); },
   'ask-no': () => { D.ui.skipAsk = true; render(); },
   'met-modo': b => { D.ui.metModo = b.dataset.v; render(); },
@@ -765,7 +846,7 @@ const ACT = {
   'his-pdf': b => { const t = S.trabajos.find(x => x.id === b.dataset.id); if (t) openPreview(t); },
   'his-edit': b => { const t = S.trabajos.find(x => x.id === b.dataset.id); if (t) { D.cot = draftFromJob(t); D.ui.v = 'cot'; render(); window.scrollTo(0, 0); saveLocal(); } },
   'his-dup': b => { const t = S.trabajos.find(x => x.id === b.dataset.id); if (t) { D.cot = Object.assign(draftFromJob(t), {id: null, pv: pad(S.cfg.pv, 4), num: pad(S.cfg.prox, 6), fecha: today()}); D.ui.v = 'cot'; render(); window.scrollTo(0, 0); toast('Copia lista con número nuevo. Revisala y guardala.'); } },
-  'his-del': b => { if (!armed(b)) return; S.trabajos = S.trabajos.filter(x => x.id !== b.dataset.id); if (D.cot.id === b.dataset.id) D.cot.id = null; persist('trabajos', b.dataset.id, true); render(); },
+  'his-del': b => { if (!armed(b)) return; const viejo = S.trabajos.find(x => x.id === b.dataset.id); S.trabajos = S.trabajos.filter(x => x.id !== b.dataset.id); if (D.cot.id === b.dataset.id) D.cot.id = null; persist('trabajos', b.dataset.id, true); render(); ((viejo && viejo.adj) || []).forEach(a => adjBorrar(a)); },
   'accent': b => { S.cfg.accent = b.dataset.h; applyBrand(); persist('cfg'); render(); },
   'xlsx-ok': () => { let n = 0; D.ui.xlsx.forEach(r => { if (upsertCliente(r)) n++; }); D.ui.xlsx = null; persist('clientes'); render(); toast('Se importaron ' + n + ' clientes.'); },
   'xlsx-no': () => { D.ui.xlsx = null; render(); },
@@ -836,6 +917,20 @@ document.addEventListener('change', e => {
   const el = e.target, m = el.dataset.m;
   if (el.id === 'fileXlsx' && el.files[0]) return readXlsx(el.files[0]);
   if (el.id === 'fileBackup' && el.files[0]) return readBackup(el.files[0]);
+  if (el.id === 'fileAdj' && el.files.length) {
+    const fs = Array.from(el.files); el.value = '';
+    (async () => {
+      for (const f of fs) {
+        if (!/pdf|jpeg|png/i.test(f.type) && !/\.(pdf|jpe?g|png)$/i.test(f.name)) { toast('“' + f.name + '” no es un PDF ni una foto JPG o PNG.'); continue; }
+        if (f.size > ADJ_MAX) { toast('“' + f.name + '” pesa más de 8 MB. Probá con una versión más liviana.'); continue; }
+        toast('Guardando “' + f.name + '”…');
+        try { D.cot.adj.push(await adjGuardar(f)); D.ui.skipAsk = false; saveLocal(); if (D.ui.v === 'cot') render(); toast('Plano adjuntado.'); }
+        catch (e) { toast('No se pudo guardar “' + f.name + '”. Revisá la conexión.'); }
+      }
+    })();
+    return;
+  }
+  if (el.dataset.chg === 'cliMet' || el.dataset.chg === 'cliPer') { D.ui[el.dataset.chg] = el.value; return render(); }
   if (el.dataset.chg === 'filtro') { D.ui.filtro = el.value; const l = $('#hisList'); if (l) l.innerHTML = hisList(); return; }
   if (el.dataset.chg === 'cliSel') { const k = S.clientes.find(c => c.id === el.value); if (k) { D.cot.cliente = {razon: k.razon, cuit: k.cuit, tel: k.tel, dir: k.dir}; D.ui.skipAsk = false; render(); saveLocal(); } return; }
   if (el.dataset.chg) {
@@ -851,7 +946,7 @@ document.addEventListener('change', e => {
   if (m === 'cot.pv') { D.cot.pv = pad(el.value, 4); el.value = D.cot.pv; }
   if (m === 'cot.num') { D.cot.num = pad(el.value, 6); el.value = D.cot.num; }
 });
-function boot2() { if (!D.cot) D.cot = newCot(); applyBrand(); render(); }
+function boot2() { if (!D.cot) D.cot = newCot(); if (!D.cot.adj) D.cot.adj = []; applyBrand(); render(); }
 loadLocal(); boot2(); connectDb();
 </script>
 </body>
