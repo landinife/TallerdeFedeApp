@@ -148,8 +148,19 @@ details.job>summary::-webkit-details-marker{display:none}
     
   </div>
 </div>
+<div class="modal" id="login" hidden role="dialog" aria-modal="true" aria-labelledby="loginT">
+  <div class="modal-b" style="justify-content:center;background:var(--bg)">
+    <span id="loginMark"></span>
+    <h1 id="loginT" style="text-align:center">Taller de Federico</h1>
+    <div class="hint" id="loginMsg" style="text-align:center;max-width:320px">Comprobando la sesión…</div>
+    <button class="btn pri" id="loginBtn" data-act="login" hidden>Entrar con Google</button>
+  </div>
+</div>
 <div class="toast" id="toast" hidden role="status"></div>
 
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
@@ -207,7 +218,7 @@ function loadLocal() {
     const o = JSON.parse(localStorage.getItem(LS) || 'null');
     if (!o) return;
     Object.assign(S.cfg, o.S.cfg || {});
-    S.clientes = o.S.clientes || []; S.cotizaciones = o.S.cotizaciones || []; S.trabajos = o.S.trabajos || [];
+    S.clientes = o.S.clientes || []; S.cotizaciones = o.S.cotizaciones || []; S.trabajos = o.S.trabajos || []; S.syncUid = o.S.syncUid || '';
     D.cot = (o.cot && o.cot.cliente && o.cot.extras) ? o.cot : null;
   } catch (e) {}
 }
@@ -222,26 +233,71 @@ async function persist(kind, id, remove) {
     else { const o = S[kind].find(x => x.id === id); if (o) await db.doc(kind + '/' + id).set(clone(o)); }
   } catch (e) { toast('Quedó guardado en este dispositivo, pero no se pudo guardar en la nube.'); }
 }
-async function connectDb() {
-  try { db = (window.claude && window.claude.use) ? await window.claude.use('db') : null; } catch (e) { db = null; }
-  if (!db) return;
+/* Sincronización: en la página publicada los datos van a Firebase, dentro de usuarios/<id de la cuenta>/ */
+const FB_CFG = {
+  apiKey: "AIzaSyDVXhMTjny9ogqcPAD2I0W9JFiCZH77SJw",
+  authDomain: "tallerdefedeapp.firebaseapp.com",
+  projectId: "tallerdefedeapp",
+  storageBucket: "tallerdefedeapp.firebasestorage.app",
+  messagingSenderId: "359355043862",
+  appId: "1:359355043862:web:2b0a325b266193197da537"
+};
+let fbUser = null;
+async function syncRemote(uid) {
+  if (!db) return false;
   try {
     const r = await Promise.all([db.doc('ajustes/config').get(), db.doc('ajustes/clientes').get(), db.collection('trabajos').limit(1000).get(), db.collection('cotizaciones').limit(1000).get()]);
-    const remoto = r[0].exists || r[1].exists || r[2].docs.length || r[3].docs.length;
-    if (remoto) {
-      if (r[0].exists) S.cfg = Object.assign({}, CFG0, clone(r[0].data()));
-      S.clientes = r[1].exists ? (clone(r[1].data()).lista || []) : [];
-      S.trabajos = r[2].docs.map(d => clone(d.data()));
-      S.cotizaciones = r[3].docs.map(d => clone(d.data()));
+    const rCfg = r[0].exists ? clone(r[0].data()) : null, rCli = r[1].exists ? (clone(r[1].data()).lista || []) : [];
+    const rT = r[2].docs.map(d => clone(d.data())), rC = r[3].docs.map(d => clone(d.data()));
+    const nuevo = !!uid && S.syncUid !== uid;
+    const soloT = nuevo ? S.trabajos.filter(t => !rT.some(x => x.id === t.id)) : [], soloCli = nuevo ? S.clientes.slice() : [];
+    if (rCfg || rCli.length || rT.length || rC.length) {
+      if (rCfg) S.cfg = Object.assign({}, CFG0, rCfg);
+      S.clientes = rCli; S.trabajos = rT; S.cotizaciones = rC;
+      let cambioCli = false;
+      soloCli.forEach(c => { if (!S.clientes.some(k => k.razon.trim().toLowerCase() === c.razon.trim().toLowerCase())) { S.clientes.push(c); cambioCli = true; } });
+      soloT.forEach(t => { S.trabajos.push(t); if (parseInt(t.pv, 10) === parseInt(S.cfg.pv, 10)) S.cfg.prox = Math.max(parseInt(S.cfg.prox, 10) || 1, parseInt(t.num, 10) + 1); });
+      if (uid) S.syncUid = uid;
       saveLocal();
+      if (cambioCli) await persist('clientes');
+      for (const t of soloT) await persist('trabajos', t.id);
+      if (soloT.length) await persist('cfg');
       if (D.cot && cotVacia(D.cot)) D.cot = null;
       boot2();
-    } else if (S.trabajos.length || S.clientes.length || S.cotizaciones.length) {
-      await persist('cfg'); await persist('clientes');
-      for (const t of S.trabajos) await persist('trabajos', t.id);
-      for (const c of S.cotizaciones) await persist('cotizaciones', c.id);
+    } else {
+      if (uid) S.syncUid = uid;
+      saveLocal();
+      if (S.trabajos.length || S.clientes.length || S.cotizaciones.length || uid) {
+        await persist('cfg'); await persist('clientes');
+        for (const t of S.trabajos) await persist('trabajos', t.id);
+        for (const c of S.cotizaciones) await persist('cotizaciones', c.id);
+      }
     }
-  } catch (e) { db = null; }
+    return true;
+  } catch (e) { return false; }
+}
+async function connectDb() {
+  if (window.claude && window.claude.use) {
+    try { db = await window.claude.use('db'); } catch (e) { db = null; }
+    if (db && !(await syncRemote(null))) db = null;
+    return;
+  }
+  if (!window.firebase || !window.firebase.auth) return;
+  try {
+    window.firebase.initializeApp(FB_CFG);
+    const fs = window.firebase.firestore();
+    try { fs.enablePersistence({synchronizeTabs: true}).catch(() => {}); } catch (e) {}
+    $('#loginMark').innerHTML = markSVG(96, 'var(--fg)'); $('#login').hidden = false;
+    window.firebase.auth().onAuthStateChanged(async u => {
+      fbUser = u; $('#login').hidden = !!u;
+      if (u) {
+        const base = 'usuarios/' + u.uid + '/';
+        db = {doc: p => fs.doc(base + p), collection: p => fs.collection(base + p)};
+        if (!(await syncRemote(u.uid))) toast('No se pudo leer la nube. Se muestran los datos de este dispositivo.');
+      } else { db = null; $('#loginMsg').textContent = 'Entrá con tu cuenta de Google para ver y resguardar tus presupuestos.'; $('#loginBtn').hidden = false; }
+      if (D.ui.v === 'cfg') render();
+    });
+  } catch (e) { $('#login').hidden = true; }
 }
 
 /* ============ Cálculos ============ */
@@ -588,7 +644,8 @@ function viewCfg() {
     (x ? '<div class="hint">Se encontraron ' + x.length + ' clientes. Primeros renglones:</div><div class="tbl"><table><tr><th>Razón social</th><th>CUIT</th><th>Teléfono</th><th>Dirección</th></tr>' + x.slice(0, 5).map(r => '<tr><td>' + esc(r.razon) + '</td><td>' + esc(r.cuit) + '</td><td>' + esc(r.tel) + '</td><td>' + esc(r.dir) + '</td></tr>').join('') + '</table></div><div class="btns"><button class="btn pri sm" data-act="xlsx-ok">Importar ' + x.length + ' clientes</button><button class="btn sm" data-act="xlsx-no">Cancelar</button></div>' : '') +
     (f ? '<div class="row">' + inp('Razón social o nombre', 'cli.razon', f.razon) + '<div class="g2">' + inp('CUIT', 'cli.cuit', f.cuit) + inp('Teléfono', 'cli.tel', f.tel) + '</div>' + inp('Dirección', 'cli.dir', f.dir) + '<div class="btns"><button class="btn pri sm" data-act="cli-ok">Guardar cliente</button><button class="btn sm" data-act="cli-no">Cancelar</button></div></div>' : '<button class="btn sm" data-act="cli-add">Agregar cliente a mano</button>') +
     S.clientes.map(k => '<div class="cli"><div><b>' + esc(k.razon) + '</b><small>' + esc([k.cuit, k.tel, k.dir].filter(Boolean).join(' · ')) + '</small></div><div class="btns" style="flex-wrap:nowrap"><button class="btn sm" data-act="cli-edit" data-id="' + k.id + '">Editar</button><button class="ico" data-act="cli-del" data-id="' + k.id + '" aria-label="Eliminar cliente">' + TRASH + '</button></div></div>').join('') + '</div>' +
-    '<div class="card"><h2>Copia de seguridad</h2><div class="hint">' + (db ? 'Tus datos se guardan en la nube de esta página y en este dispositivo.' : 'Tus datos se guardan en este dispositivo. Descargá una copia cada tanto.') + '</div><button class="btn sm" data-act="backup">Descargar copia de seguridad</button><label class="f"><span>Restaurar desde una copia (.json)</span><input type="file" id="fileBackup" accept=".json,application/json"></label></div>';
+    (fbUser ? '<div class="card"><h2>Cuenta</h2><div class="hint">Sesión iniciada como ' + esc(fbUser.email || fbUser.displayName || '') + '. Tus datos se guardan en tu cuenta y se ven en cualquier dispositivo donde entres.</div><div class="btns"><button class="btn sm" data-act="sync">Sincronizar ahora</button><button class="btn sm danger" data-act="logout">Cerrar sesión</button></div></div>' : '') +
+    '<div class="card"><h2>Copia de seguridad</h2><div class="hint">' + (db ? 'Tus datos se guardan en la nube y en este dispositivo.' : 'Tus datos se guardan en este dispositivo. Descargá una copia cada tanto.') + '</div><button class="btn sm" data-act="backup">Descargar copia de seguridad</button><label class="f"><span>Restaurar desde una copia (.json)</span><input type="file" id="fileBackup" accept=".json,application/json"></label></div>';
 }
 function render() {
   const v = D.ui.v;
@@ -699,6 +756,22 @@ const ACT = {
   'cli-ok': () => { if (!upsertCliente(D.cli)) return toast('Falta el nombre del cliente.'); D.cli = null; persist('clientes'); render(); },
   'cli-no': () => { D.cli = null; render(); },
   'cli-del': b => { if (!armedIco(b)) return; S.clientes = S.clientes.filter(x => x.id !== b.dataset.id); persist('clientes'); render(); },
+  'login': () => {
+    const pr = new window.firebase.auth.GoogleAuthProvider(), au = window.firebase.auth();
+    $('#loginMsg').textContent = 'Abriendo Google…';
+    au.signInWithPopup(pr).catch(e => {
+      if (e && (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment')) return au.signInWithRedirect(pr);
+      $('#loginMsg').textContent = (e && (e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request')) ? 'Entrá con tu cuenta de Google para ver y resguardar tus presupuestos.' : 'No se pudo iniciar sesión (' + ((e && e.code) || 'error') + ').';
+    });
+  },
+  'logout': async b => {
+    if (!armed(b)) return;
+    try { await window.firebase.auth().signOut(); } catch (e) {}
+    S.cfg = Object.assign({}, CFG0); S.clientes = []; S.trabajos = []; S.cotizaciones = []; S.syncUid = ''; D.cot = null; D.ui.v = 'cot';
+    try { localStorage.removeItem(LS); } catch (e) {}
+    boot2();
+  },
+  'sync': async () => { toast((await syncRemote(fbUser && fbUser.uid)) ? 'Datos sincronizados.' : 'No se pudo sincronizar. Revisá la conexión.'); },
   'backup': async () => { await saveFile('TallerdeFedeApp copia ' + today() + '.json', new Blob([JSON.stringify({cfg: S.cfg, clientes: S.clientes, trabajos: S.trabajos, cotizaciones: S.cotizaciones}, null, 1)], {type: 'application/json'})); }
 };
 function armedIco(b) { if (b.dataset.armed) return true; b.dataset.armed = '1'; b.style.color = 'var(--danger)'; b.style.borderColor = 'var(--danger)'; toast('Tocá otra vez el tacho para eliminar.'); setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.style.color = ''; b.style.borderColor = ''; } }, 3500); return false; }

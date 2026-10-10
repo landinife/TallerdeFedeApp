@@ -28,6 +28,6 @@ Cada vez que se sube una versión nueva a GitHub, Cloudflare la publica sola.
 
 ## Datos
 
-Los datos se guardan en el navegador del dispositivo donde se usa (localStorage).
-Todavía no hay sincronización con Firebase: usá Configuración > Copia de seguridad
-para descargar los datos y restaurarlos en otro dispositivo.
+La app pide entrar con una cuenta de Google. Los datos de cada cuenta se guardan en
+Firebase (Firestore), dentro de `usuarios/<id de la cuenta>/`, y también en el dispositivo.
+Las reglas de Firestore solo permiten que cada cuenta lea y escriba sus propios datos.
