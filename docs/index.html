@@ -105,6 +105,8 @@ details.job>summary::-webkit-details-marker{display:none}
 .acts{max-width:720px;margin:0 auto;padding:0 16px 10px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .acts .btn{padding:8px 6px;line-height:1.15}
 .sheet{display:flex;flex-direction:column;gap:16px}
+.adj-t{width:100%;max-width:720px;font-weight:600;border-top:1px solid var(--line);padding-top:12px;overflow-wrap:anywhere}
+.modal-b img,.sheet img{width:100%;max-width:720px;height:auto;background:#FFFFFF;box-shadow:0 1px 6px rgba(0,0,0,.25)}
 .modal-b canvas,.sheet canvas{width:100%;max-width:720px;height:auto;background:#FFFFFF;box-shadow:0 1px 6px rgba(0,0,0,.25)}
 .modal-f{padding:12px 16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
 .toast{position:fixed;left:16px;right:16px;bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:30;margin:0 auto;max-width:520px;background:var(--fg);color:var(--bg);padding:12px 16px;border-radius:12px;font-weight:500;text-align:center}
@@ -547,6 +549,44 @@ async function conAdjuntos(blob, job) {
   }
   return new Blob([await out.save()], {type: 'application/pdf'});
 }
+/* Vista de los planos adjuntos en pantalla (el lector de PDF se carga recién cuando hace falta) */
+const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+let pdfjsP = null;
+function cargarPdfJs() {
+  if (!pdfjsP) pdfjsP = new Promise((ok, mal) => {
+    const sc = document.createElement('script'); sc.src = PDFJS + 'pdf.min.js';
+    sc.onerror = () => { pdfjsP = null; mal(new Error('nolib')); };
+    sc.onload = () => { let n = 0; const t = setInterval(() => { if (window.pdfjsLib) { clearInterval(t); window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js'; ok(window.pdfjsLib); } else if (++n > 100) { clearInterval(t); pdfjsP = null; mal(new Error('nolib')); } }, 50); };
+    document.head.appendChild(sc);
+  });
+  return pdfjsP;
+}
+async function pintarAdjuntos(box, job) {
+  const adj = job.adj || [];
+  if (!adj.length) return;
+  const rot = t => { const d = document.createElement('div'); d.className = 'adj-t'; d.textContent = t; box.appendChild(d); return d; };
+  for (const a of adj) {
+    const tit = rot(a.nombre + ' · cargando…');
+    try {
+      const bytes = await adjLeer(a);
+      if (!box.isConnected) return;
+      if (esPdf(a)) {
+        const lib = await cargarPdfJs(), doc = await lib.getDocument({data: bytes.slice()}).promise, total = Math.min(doc.numPages, 20);
+        for (let n = 1; n <= total; n++) {
+          const pg = await doc.getPage(n), vp = pg.getViewport({scale: 1190 / pg.getViewport({scale: 1}).width}), cv = document.createElement('canvas');
+          cv.width = Math.round(vp.width); cv.height = Math.round(vp.height); cv.setAttribute('role', 'img'); cv.setAttribute('aria-label', a.nombre + ', hoja ' + n);
+          await pg.render({canvasContext: cv.getContext('2d'), viewport: vp}).promise;
+          if (!box.isConnected) return;
+          box.appendChild(cv);
+        }
+        tit.textContent = a.nombre + (doc.numPages > 20 ? ' · se muestran 20 de ' + doc.numPages + ' hojas' : doc.numPages > 1 ? ' · ' + doc.numPages + ' hojas' : '');
+      } else {
+        const im = document.createElement('img'); im.alt = 'Plano adjunto: ' + a.nombre; im.src = URL.createObjectURL(new Blob([bytes], {type: /png/i.test(a.tipo) || /\.png$/i.test(a.nombre) ? 'image/png' : 'image/jpeg'}));
+        box.appendChild(im); tit.textContent = a.nombre;
+      }
+    } catch (e) { try { console.warn('No se pudo mostrar el adjunto', e); } catch (x) {} tit.textContent = a.nombre + ' · no se pudo mostrar acá; se ve al descargar el PDF.'; }
+  }
+}
 let PV = null;
 const fileName = j => ('PTO ' + parseInt(j.pv, 10) + '-' + parseInt(j.num, 10) + ' ' + j.cliente.razon).replace(/[\\/:*?"<>|]/g, '').trim() + '.pdf';
 function paint(box, job) {
@@ -555,7 +595,7 @@ function paint(box, job) {
 }
 function openPreview(job) {
   PV = {job};
-  paint($('#modalB'), job);
+  paint($('#modalB'), job); pintarAdjuntos($('#modalB'), job);
   $('#modalT').textContent = 'Presupuesto ' + job.pv + ' - ' + job.num;
   $('#modal').hidden = false; $('#modalB').scrollTop = 0;
 }
@@ -639,7 +679,7 @@ function viewPre() {
     (ask ? '<div class="card"><b>¿Lo guardo ya en el Historial?</b><div class="hint">Queda como Presupuestado y empieza a contar en las métricas.</div><div class="btns"><button class="btn sm pri" data-act="ask-save">Sí, guardar</button><button class="btn sm" data-act="ask-no">Todavía no</button></div></div>' : '') +
     (!j.cliente.razon.trim() ? '<div class="hint warn">Falta el cliente: cargalo en el Cotizador antes de enviarlo.</div>' : '') +
     '<div class="hint">Así lo ve el cliente. Para cambiar algo, volvé al Cotizador.</div><div class="sheet" id="sheet"></div>' +
-    ((j.adj || []).length ? '<div class="card"><b>A continuación, en el mismo PDF</b><div class="items">' + j.adj.map(a => '<div><span>' + esc(a.nombre) + '</span><span>' + (esPdf(a) ? 'PDF' : 'Imagen') + '</span></div>').join('') + '</div><div class="hint">Los planos no se muestran acá: se ven al descargar o compartir el PDF.</div></div>' : '');
+    ((j.adj || []).length ? '<div class="hint">Los planos adjuntos se muestran debajo del presupuesto y salen en el mismo PDF.</div>' : '');
 }
 function viewHis() {
   const sum = e => S.trabajos.filter(t => e.includes(t.estado)).reduce((a, t) => a + (t.total || 0), 0);
@@ -663,7 +703,7 @@ function hisList() {
       '<div class="g2"><label class="f"><span>Estado</span><select id="est-' + t.id + '" data-chg="estado" data-id="' + t.id + '">' + ESTADOS.map(e => '<option value="' + e[0] + '"' + (e[0] === t.estado ? ' selected' : '') + '>' + e[1] + '</option>').join('') + '</select></label>' +
       (fin ? '<label class="chk" style="align-self:end"><input type="checkbox" id="fac-' + t.id + '" data-chg="facturado" data-id="' + t.id + '"' + (t.facturado ? ' checked' : '') + '><span>Facturado</span></label>' : '<div></div>') + '</div>' +
       '<div class="hint">' + (t.hist || []).map(h => eName(h.e) + ' ' + fechaCorta(h.f)).join(' → ') + '</div>' +
-      '<div class="btns"><button class="btn sm pri" data-act="his-pdf" data-id="' + t.id + '">Ver PDF</button><button class="btn sm" data-act="his-edit" data-id="' + t.id + '">Editar</button><button class="btn sm" data-act="his-dup" data-id="' + t.id + '">Duplicar</button><button class="btn sm danger" data-act="his-del" data-id="' + t.id + '">Eliminar</button></div></div></details>';
+      '<div class="btns"><button class="btn sm pri" data-act="his-pdf" data-id="' + t.id + '">' + ((t.adj || []).length ? 'Ver presupuesto y planos' : 'Ver presupuesto') + '</button><button class="btn sm" data-act="his-edit" data-id="' + t.id + '">Editar</button><button class="btn sm" data-act="his-dup" data-id="' + t.id + '">Duplicar</button><button class="btn sm danger" data-act="his-del" data-id="' + t.id + '">Eliminar</button></div></div></details>';
   }).join('');
 }
 const METR = [['presupuestado', 'Presupuestados'], ['confirmado', 'Confirmados'], ['terminado', 'Terminados'], ['facturado', 'Facturados'], ['cobrado', 'Cobrados']];
@@ -753,7 +793,7 @@ function render() {
   a.innerHTML = v === 'cot' ? '<button class="btn sm pri" data-act="tab" data-v="pre">Ver presupuesto</button><button class="btn sm" data-act="cot-save">Guardar</button><button class="btn sm" data-act="cot-new">Nuevo</button>'
     : v === 'pre' ? '<button class="btn sm pri" data-act="pre-share">Compartir</button><button class="btn sm" data-act="pre-down">Descargar</button><button class="btn sm" data-act="tab" data-v="cot">Editar</button>' : '';
   if (v === 'cot') recalcCot();
-  if (v === 'pre') { const sh = $('#sheet'); if (sh) paint(sh, jobFromCot(D.cot)); }
+  if (v === 'pre') { const sh = $('#sheet'); if (sh) { const jj = jobFromCot(D.cot); paint(sh, jj); pintarAdjuntos(sh, jj); } }
 }
 function applyBrand() {
   const r = document.documentElement.style;
