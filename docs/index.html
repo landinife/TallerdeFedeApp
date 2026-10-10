@@ -249,10 +249,11 @@ const FB_CFG = {
 };
 let fbUser = null, fsdb = null, ws = null, inv = null, acceso = [];
 function resetLocal() { S.cfg = Object.assign({}, CFG0); S.clientes = []; S.trabajos = []; S.cotizaciones = []; S.syncUid = ''; D.cot = null; }
+const todos = c => (window.claude && window.claude.use) ? c.limit(1000).get() : c.get();
 async function syncRemote(uid, merge) {
   if (!db) return false;
   try {
-    const r = await Promise.all([db.doc('ajustes/config').get(), db.doc('ajustes/clientes').get(), db.collection('trabajos').limit(1000).get(), db.collection('cotizaciones').limit(1000).get()]);
+    const r = await Promise.all([db.doc('ajustes/config').get(), db.doc('ajustes/clientes').get(), todos(db.collection('trabajos')), todos(db.collection('cotizaciones'))]);
     const rCfg = r[0].exists ? clone(r[0].data()) : null, rCli = r[1].exists ? (clone(r[1].data()).lista || []) : [];
     const rT = r[2].docs.map(d => clone(d.data())), rC = r[3].docs.map(d => clone(d.data()));
     const nuevo = !!merge && !!uid && S.syncUid !== uid;
@@ -512,11 +513,28 @@ async function saveFile(filename, blob) {
 const ADJ_MAX = 8 * 1024 * 1024, adjCache = {};
 function b64DeBytes(u8) { let t = ''; for (let i = 0; i < u8.length; i += 0x8000) t += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(t); }
 function bytesDeB64(b) { const t = atob(b), u = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) u[i] = t.charCodeAt(i); return u; }
+/* Las fotos se guardan como JPG de hasta 2000 px de lado: se leen igual y ocupan mucho menos */
+async function achicarFoto(file) {
+  const orig = new Uint8Array(await file.arrayBuffer());
+  try {
+    const url = URL.createObjectURL(file), im = new Image();
+    await new Promise((ok, mal) => { im.onload = ok; im.onerror = mal; im.src = url; });
+    const k = Math.min(1, 2000 / Math.max(im.naturalWidth, im.naturalHeight)), cv = document.createElement('canvas');
+    cv.width = Math.round(im.naturalWidth * k); cv.height = Math.round(im.naturalHeight * k);
+    const c = cv.getContext('2d'); c.fillStyle = '#FFFFFF'; c.fillRect(0, 0, cv.width, cv.height); c.drawImage(im, 0, 0, cv.width, cv.height);
+    URL.revokeObjectURL(url);
+    const bl = await new Promise(ok => cv.toBlob(ok, 'image/jpeg', 0.8));
+    if (bl && bl.size < orig.length) return {u8: new Uint8Array(await bl.arrayBuffer()), nombre: file.name.replace(/\.(png|jpe?g)$/i, '') + '.jpg', tipo: 'image/jpeg'};
+  } catch (e) {}
+  return {u8: orig, nombre: file.name, tipo: file.type || ''};
+}
 async function adjGuardar(file) {
-  const u8 = new Uint8Array(await file.arrayBuffer()), id = uid(), b = b64DeBytes(u8), parte = (window.claude && window.claude.use) ? 180000 : 600000, n = Math.ceil(b.length / parte);
+  const esFoto = /jpeg|png/i.test(file.type) || /\.(jpe?g|png)$/i.test(file.name);
+  const f = esFoto ? await achicarFoto(file) : {u8: new Uint8Array(await file.arrayBuffer()), nombre: file.name, tipo: file.type || ''};
+  const u8 = f.u8, id = uid(), b = b64DeBytes(u8), parte = (window.claude && window.claude.use) ? 180000 : 600000, n = Math.ceil(b.length / parte);
   if (db) for (let i = 0; i < n; i++) await db.doc('adjuntos/' + id + '-' + i).set({d: b.slice(i * parte, (i + 1) * parte)});
   adjCache[id] = u8;
-  return {id, nombre: file.name, bytes: u8.length, partes: n, tipo: file.type || ''};
+  return {id, nombre: f.nombre, bytes: u8.length, partes: n, tipo: f.tipo};
 }
 async function adjLeer(a) {
   if (adjCache[a.id]) return adjCache[a.id];
@@ -655,7 +673,7 @@ function viewCot() {
     '<div class="card"><h2>Otros ítems a precio directo</h2><div class="hint">Para trabajos que no necesitás costear: escribí la descripción y el precio, y salen tal cual en el presupuesto.</div>' + c.extras.map(extra).join('') + '<button class="btn sm" data-act="add-row" data-k="extras">Agregar ítem</button></div>' +
     '<div class="card"><h2>Planos adjuntos</h2><div class="hint">El plano o la foto que mandó el cliente sale a continuación del presupuesto, en el mismo PDF, con el número de presupuesto marcado en cada hoja.</div>' +
     (c.adj || []).map((a, i) => '<div class="cli"><div><b>' + esc(a.nombre) + '</b><small>' + (esPdf(a) ? 'PDF' : 'Imagen') + ' · ' + (a.bytes / 1048576).toLocaleString('es-AR', {maximumFractionDigits: 1}) + ' MB</small></div><button class="ico" data-act="adj-del" data-i="' + i + '" aria-label="Quitar adjunto">' + TRASH + '</button></div>').join('') +
-    '<label class="f"><span>Agregar PDF o foto (hasta 8 MB cada uno)</span><input type="file" id="fileAdj" accept="application/pdf,image/jpeg,image/png" multiple></label></div>' +
+    '<label class="f"><span>Agregar PDF (hasta 8 MB) o foto</span><input type="file" id="fileAdj" accept="application/pdf,image/jpeg,image/png" multiple></label></div>' +
     '<div class="card"><h2>Total para el cliente</h2><label class="chk"><input type="checkbox" id="i-cot-iva" data-m="cot.iva"' + (c.iva ? ' checked' : '') + '><span>Discriminar IVA (se suma al subtotal)</span></label>' +
     (c.iva ? '<label class="f"><span>Alícuota</span><select id="i-cot-ivaPct" data-m="cot.ivaPct"><option value="21"' + (parseNum(c.ivaPct) !== 10.5 ? ' selected' : '') + '>21 %</option><option value="10,5"' + (parseNum(c.ivaPct) === 10.5 ? ' selected' : '') + '>10,5 %</option></select></label>' : '') +
     '<div class="sum" id="cliSum"></div></div>' +
@@ -763,6 +781,12 @@ function viewMet() {
   }).join('') +
     '<details class="job"><summary><b>Ver los números en tabla</b></summary><div class="job-body"><div class="tbl"><table><tr><th>Mes</th>' + METR.map(m => '<th>' + m[1] + '</th>').join('') + '</tr>' + meses.map((x, i) => '<tr><td>' + x.full + '</td>' + METR.map((m, mi) => '<td class="num">' + (modo === 'monto' ? money(data[mi][i].m) : data[mi][i].c) + '</td>').join('') + '</tr>').join('') + '</table></div></div></details>';
 }
+function usoNube() {
+  const vistos = {}; let planos = 0, n = 0;
+  S.trabajos.map(t => t.adj || []).concat([D.cot.adj || []]).forEach(l => l.forEach(a => { if (!vistos[a.id]) { vistos[a.id] = 1; planos += a.bytes * 1.34; n++; } }));
+  const datos = JSON.stringify(S.trabajos).length + JSON.stringify(S.clientes).length;
+  return {planos, n, datos, total: planos + datos, tope: 1024 * 1024 * 1024};
+}
 function viewCfg() {
   const c = S.cfg, viejo = diasDesde(c.dolarFecha) > 7, x = D.ui.xlsx, f = D.cli;
   return '<h1>Configuración</h1>' +
@@ -782,6 +806,9 @@ function viewCfg() {
       '<div class="btns"><button class="btn sm" data-act="sync">Sincronizar ahora</button><button class="btn sm danger" data-act="logout">Cerrar sesión</button></div></div>' +
       (ws && !ws.compartido ? '<div class="card"><h2>Compartir este taller</h2><div class="hint">Las cuentas que agregues ven y modifican los mismos presupuestos, clientes y configuración.</div>' + acceso.map(e => '<div class="cli"><div><b>' + esc(e) + '</b></div><button class="ico" data-act="acc-del" data-e="' + esc(e) + '" aria-label="Quitar acceso">' + TRASH + '</button></div>').join('') +
         inp('Correo de Google de la otra persona', 'ui.accEmail', D.ui.accEmail || '', 'type="email" autocomplete="off" inputmode="email"') + '<button class="btn sm" data-act="acc-add">Dar acceso</button></div>' : '') : '') +
+    (() => { const u = usoNube(), mb = v => (v / 1048576).toLocaleString('es-AR', {maximumFractionDigits: v < 10485760 ? 1 : 0}), pc = u.total / u.tope * 100;
+      return '<div class="card"><h2>Espacio usado</h2><div class="job-l1"><b>' + mb(u.total) + ' MB de 1.024 MB</b><span>' + qty(pc) + ' %</span></div><div class="hbar"><span style="width:' + Math.min(Math.max(pc, 0.5), 100) + '%;background:var(--' + (pc >= 80 ? 'danger' : 'accent') + ')"></span></div>' +
+        '<div class="hint">' + u.n + (u.n === 1 ? ' plano adjunto' : ' planos adjuntos') + ' (' + mb(u.planos) + ' MB) y ' + S.trabajos.length + (S.trabajos.length === 1 ? ' trabajo' : ' trabajos') + ' (' + mb(u.datos) + ' MB). Es una estimación sobre el límite gratuito de la nube.' + (pc >= 80 ? ' <span class="warn">Queda poco lugar: conviene revisar los adjuntos más pesados.</span>' : '') + '</div></div>'; })() +
     '<div class="card"><h2>Copia de seguridad</h2><div class="hint">' + (db ? 'Tus datos se guardan en la nube y en este dispositivo.' : 'Tus datos se guardan en este dispositivo. Descargá una copia cada tanto.') + '</div><button class="btn sm" data-act="backup">Descargar copia de seguridad</button><label class="f"><span>Restaurar desde una copia (.json)</span><input type="file" id="fileBackup" accept=".json,application/json"></label></div>';
 }
 function render() {
@@ -962,7 +989,7 @@ document.addEventListener('change', e => {
     (async () => {
       for (const f of fs) {
         if (!/pdf|jpeg|png/i.test(f.type) && !/\.(pdf|jpe?g|png)$/i.test(f.name)) { toast('“' + f.name + '” no es un PDF ni una foto JPG o PNG.'); continue; }
-        if (f.size > ADJ_MAX) { toast('“' + f.name + '” pesa más de 8 MB. Probá con una versión más liviana.'); continue; }
+        if (f.size > ADJ_MAX && /pdf/i.test(f.type + f.name)) { toast('“' + f.name + '” pesa más de 8 MB. Probá con una versión más liviana.'); continue; }
         toast('Guardando “' + f.name + '”…');
         try { D.cot.adj.push(await adjGuardar(f)); D.ui.skipAsk = false; saveLocal(); if (D.ui.v === 'cot') render(); toast('Plano adjuntado.'); }
         catch (e) { toast('No se pudo guardar “' + f.name + '”. Revisá la conexión.'); }
