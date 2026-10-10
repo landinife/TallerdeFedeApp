@@ -5,26 +5,18 @@ Es un sitio estático: no necesita instalar ni compilar nada.
 
 ## Archivos
 
-- `index.html`: toda la app (pantallas, cálculos y armado del PDF).
-- `manifest.webmanifest` e `icons/`: nombre e icono para instalarla en el teléfono.
+- `public/index.html`: toda la app (pantallas, cálculos y armado del PDF).
+- `public/manifest.webmanifest` y `public/icons/`: nombre e icono para instalarla en el teléfono.
+- `wrangler.jsonc`: le indica a Cloudflare que publique la carpeta `public`.
 
-## Subirla a GitHub
+## Publicarla en Cloudflare
 
-1. Entrá al repositorio `TallerdeFedeApp`.
-2. Agregar archivo (Add file) > Subir archivos (Upload files).
-3. Arrastrá `index.html`, `manifest.webmanifest`, `README.md` y la carpeta `icons`.
-4. Confirmar cambios (Commit changes).
-
-## Publicarla en Cloudflare Pages
-
-1. En Cloudflare: Workers y Pages (Workers & Pages) > Crear (Create) > Pages > Conectar a Git (Connect to Git).
+1. En Cloudflare: Workers y Pages (Workers & Pages) > Crear (Create) > Importar un repositorio (Import a repository).
 2. Elegí el repositorio `TallerdeFedeApp`.
-3. Preajuste de framework (Framework preset): Ninguno (None).
-4. Comando de compilación (Build command): dejalo vacío.
-5. Directorio de salida (Build output directory): `/`
-6. Guardar e implementar (Save and Deploy).
+3. Dejá las opciones como vienen: el archivo `wrangler.jsonc` ya indica qué publicar.
+4. Guardar e implementar (Save and Deploy).
 
-Cada vez que subas una versión nueva a GitHub, Cloudflare la publica sola.
+Cada vez que se sube una versión nueva a GitHub, Cloudflare la publica sola.
 
 ## Datos
 
