@@ -809,6 +809,7 @@ function viewCfg() {
     (() => { const u = usoNube(), mb = v => (v / 1048576).toLocaleString('es-AR', {maximumFractionDigits: v < 10485760 ? 1 : 0}), pc = u.total / u.tope * 100;
       return '<div class="card"><h2>Espacio usado</h2><div class="job-l1"><b>' + mb(u.total) + ' MB de 1.024 MB</b><span>' + qty(pc) + ' %</span></div><div class="hbar"><span style="width:' + Math.min(Math.max(pc, 0.5), 100) + '%;background:var(--' + (pc >= 80 ? 'danger' : 'accent') + ')"></span></div>' +
         '<div class="hint">' + u.n + (u.n === 1 ? ' plano adjunto' : ' planos adjuntos') + ' (' + mb(u.planos) + ' MB) y ' + S.trabajos.length + (S.trabajos.length === 1 ? ' trabajo' : ' trabajos') + ' (' + mb(u.datos) + ' MB). Es una estimación sobre el límite gratuito de la nube.' + (pc >= 80 ? ' <span class="warn">Queda poco lugar: conviene revisar los adjuntos más pesados.</span>' : '') + '</div></div>'; })() +
+    '<div class="card"><h2>Compartir la app</h2><div class="hint">Mandá el enlace para que otra persona la abra en Chrome y la instale. Cada uno entra con su propia cuenta de Google.</div><button class="btn sm" data-act="app-share">Compartir enlace de la app</button></div>' +
     '<div class="card"><h2>Copia de seguridad</h2><div class="hint">' + (db ? 'Tus datos se guardan en la nube y en este dispositivo.' : 'Tus datos se guardan en este dispositivo. Descargá una copia cada tanto.') + '</div><button class="btn sm" data-act="backup">Descargar copia de seguridad</button><label class="f"><span>Restaurar desde una copia (.json)</span><input type="file" id="fileBackup" accept=".json,application/json"></label></div>';
 }
 function render() {
@@ -958,6 +959,11 @@ const ACT = {
     catch (e) { toast('No se pudo quitar el acceso.'); }
   },
   'sync': async () => { toast((await syncRemote(ws && ws.uid, !!ws && !ws.compartido)) ? 'Datos sincronizados.' : 'No se pudo sincronizar. Revisá la conexión.'); },
+  'app-share': async () => {
+    const url = location.origin + location.pathname;
+    try { if (navigator.share) { await navigator.share({title: 'TallerdeFedeApp', text: 'App de presupuestos de ' + (S.cfg.razon || 'Taller de Federico'), url}); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
+    try { await navigator.clipboard.writeText(url); toast('Enlace copiado: pegalo en WhatsApp o donde quieras.'); } catch (e) { toast('Enlace de la app: ' + url); }
+  },
   'backup': async () => { await saveFile('TallerdeFedeApp copia ' + today() + '.json', new Blob([JSON.stringify({cfg: S.cfg, clientes: S.clientes, trabajos: S.trabajos, cotizaciones: S.cotizaciones}, null, 1)], {type: 'application/json'})); }
 };
 function armedIco(b) { if (b.dataset.armed) return true; b.dataset.armed = '1'; b.style.color = 'var(--danger)'; b.style.borderColor = 'var(--danger)'; toast('Tocá otra vez el tacho para eliminar.'); setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.style.color = ''; b.style.borderColor = ''; } }, 3500); return false; }
