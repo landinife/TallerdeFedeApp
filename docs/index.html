@@ -128,6 +128,7 @@ details.job>summary::-webkit-details-marker{display:none}
 .tbl{overflow-x:auto}
 .tbl table{border-collapse:collapse;font-size:14px;width:100%}
 .tbl td,.tbl th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;white-space:nowrap}
+.tabs-in{grid-template-columns:repeat(5,minmax(0,1fr))} .tab{font-size:12px}
 </style>
 </head>
 <body>
@@ -143,13 +144,14 @@ details.job>summary::-webkit-details-marker{display:none}
   <button class="tab" data-act="tab" data-v="pre"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"></path><path d="M14 3v4h4M10 12h5M10 16h5"></path></svg>Presupuesto</button>
   <button class="tab" data-act="tab" data-v="his"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>Historial</button>
   <button class="tab" data-act="tab" data-v="met"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M7 20v-7M12 20V5M17 20v-10"></path></svg>Métricas</button>
+<button class="tab" data-act="tab" data-v="oc"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2.4 11h10.2L20 7H6.2"></path><circle cx="9" cy="19.5" r="1.5"></circle><circle cx="17" cy="19.5" r="1.5"></circle></svg>Compras</button>
 </div></nav>
 <div class="modal" id="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modalT">
   <div class="modal-h"><h1 id="modalT">Vista previa</h1><button class="btn sm" data-act="modal-close">Volver</button></div>
   <div class="modal-b" id="modalB"></div>
   <div class="modal-f">
-    <div class="btns"><button class="btn pri" data-act="pdf-share">Compartir por WhatsApp</button><button class="btn" data-act="pdf-down">Descargar PDF</button></div>
-    
+    <div class="btns"><button class="btn pri" data-act="pdf-share">Compartir por WhatsApp</button><button class="btn" data-act="pdf-down">Descargar PDF</button><button class="btn" data-act="pdf-mail" id="btnMail" hidden>Enviar por mail</button></div>
+
   </div>
 </div>
 <div class="modal" id="login" hidden role="dialog" aria-modal="true" aria-labelledby="loginT">
@@ -213,11 +215,11 @@ const ESTADOS = [['presupuestado', 'Presupuestado'], ['confirmado', 'Confirmado'
 const eIdx = e => ESTADOS.findIndex(x => x[0] === e);
 const eName = e => (ESTADOS[eIdx(e)] || ESTADOS[0])[1];
 const CFG0 = {accent: '#E8590C', dolar: 0, dolarFecha: '', razon: 'Taller de Federico', leyenda: 'Tornería y fresado', cuit: '', tel: '', dir: '', firmante: '', saludo: 'Por medio de la presente lo saludamos cordialmente y le hacemos llegar nuestra propuesta', pv: 2, prox: 1, ivaPct: '21', hh: 0, hhMoneda: 'ARS'};
-const S = {cfg: Object.assign({}, CFG0), clientes: [], cotizaciones: [], trabajos: []};
+const S = {cfg: Object.assign({}, CFG0), clientes: [], cotizaciones: [], trabajos: [], proveedores: [], ordenes: []};
 const D = {cot: null, cli: null, ui: {v: 'cot', q: '', filtro: 'todos', open: {}, xlsx: null}};
 let db = null;
 const LS = 'tallerdefede_v1';
-function saveLocal() { try { localStorage.setItem(LS, JSON.stringify({S, cot: D.cot})); } catch (e) {} }
+function saveLocal() { try { localStorage.setItem(LS, JSON.stringify({S, cot: D.cot, oc: D.oc})); } catch (e) {} }
 function loadLocal() {
   try {
     const o = JSON.parse(localStorage.getItem(LS) || 'null');
@@ -225,6 +227,7 @@ function loadLocal() {
     Object.assign(S.cfg, o.S.cfg || {});
     S.clientes = o.S.clientes || []; S.cotizaciones = o.S.cotizaciones || []; S.trabajos = o.S.trabajos || []; S.syncUid = o.S.syncUid || '';
     D.cot = (o.cot && o.cot.cliente && o.cot.extras) ? o.cot : null;
+    S.proveedores = o.S.proveedores || []; S.ordenes = o.S.ordenes || []; D.oc = (o.oc && o.oc.prov && o.oc.items) ? o.oc : null;
   } catch (e) {}
 }
 const clone = o => JSON.parse(JSON.stringify(o));
@@ -234,6 +237,7 @@ async function persist(kind, id, remove) {
   try {
     if (kind === 'cfg') await db.doc('ajustes/config').set(clone(S.cfg));
     else if (kind === 'clientes') await db.doc('ajustes/clientes').set({lista: clone(S.clientes)});
+    else if (kind === 'proveedores') await db.doc('ajustes/proveedores').set({lista: clone(S.proveedores)});
     else if (remove) await db.doc(kind + '/' + id).delete();
     else { const o = S[kind].find(x => x.id === id); if (o) await db.doc(kind + '/' + id).set(clone(o)); }
   } catch (e) { toast('Quedó guardado en este dispositivo, pero no se pudo guardar en la nube.'); }
@@ -248,7 +252,7 @@ const FB_CFG = {
   appId: "1:359355043862:web:2b0a325b266193197da537"
 };
 let fbUser = null, fsdb = null, ws = null, inv = null, acceso = [];
-function resetLocal() { S.cfg = Object.assign({}, CFG0); S.clientes = []; S.trabajos = []; S.cotizaciones = []; S.syncUid = ''; D.cot = null; }
+function resetLocal() { S.cfg = Object.assign({}, CFG0); S.clientes = []; S.trabajos = []; S.cotizaciones = []; S.syncUid = ''; D.cot = null; S.proveedores = []; S.ordenes = []; D.oc = null; }
 const todos = c => (window.claude && window.claude.use) ? c.limit(1000).get() : c.get();
 async function syncRemote(uid, merge) {
   if (!db) return false;
@@ -290,6 +294,7 @@ async function openWs(uid, compartido) {
   db = {doc: p => fsdb.doc(base + p), collection: p => fsdb.collection(base + p)};
   if (S.syncUid !== uid && (compartido || S.syncUid)) resetLocal();
   if (!(await syncRemote(uid, !compartido))) toast(compartido ? 'No se pudo abrir el taller compartido. Puede que te hayan quitado el acceso.' : 'No se pudo leer la nube. Se muestran los datos de este dispositivo.');
+  await syncCompras();
   acceso = [];
   if (!compartido) { try { const a = await fsdb.doc('accesos/' + uid).get(); if (a.exists) acceso = a.data().emails || []; } catch (e) {} }
   boot2();
@@ -377,6 +382,11 @@ const FONT = 'Helvetica, Arial, "Liberation Sans", sans-serif';
 const PT = 0.3528;
 let mctx;
 function tw(s, size, bold) { if (!mctx) mctx = document.createElement('canvas').getContext('2d'); mctx.font = (bold ? 'bold ' : '') + '100px ' + FONT; return mctx.measureText(String(s)).width / 100 * size * PT; }
+/* Ancho de un texto medido con la misma letra que usa el PDF (evita que el cuadro OC o P se monte sobre el título) */
+function twPdf(s, size, bold) {
+  try { if (window.jspdf) { if (!twPdf.d) twPdf.d = new window.jspdf.jsPDF({unit: 'mm'}); const d = twPdf.d; d.setFont('helvetica', bold ? 'bold' : 'normal'); d.setFontSize(size); return d.getTextWidth(String(s)); } } catch (e) {}
+  return tw(s, size, bold);
+}
 function wrap(s, size, bold, maxW) {
   const out = [];
   String(s || '').split(/\r?\n/).forEach(par => {
@@ -394,7 +404,7 @@ function buildPages(j, cfg) {
   const T = (s, x, yy, size, o) => { o = o || {}; ops.push({t: 'text', s: String(s), x, y: yy, size, bold: !!o.bold, color: o.color || ink, align: o.align || 'left'}); };
   const Rc = (x, yy, w, h, color) => ops.push({t: 'rect', x, y: yy, w, h, color});
   const Ln = (x1, y1, x2, y2, color, lw) => ops.push({t: 'line', x1, y1, x2, y2, color, lw});
-  const nombre = String(cfg.razon || '').toUpperCase(), numero = j.pv + ' - ' + j.num;
+  const nombre = String(cfg.razon || '').toUpperCase(), numero = j.numero || (j.pv + ' - ' + j.num), TIT = j.titulo || 'PRESUPUESTO', LET = j.letra || 'P';
   function tableHead() {
     Rc(M, y, W, 8, ink);
     T('DETALLE', M + 3, y + 5.4, 8, {bold: 1, color: white}); T('CANT.', 136, y + 5.4, 8, {bold: 1, color: white, align: 'right'});
@@ -403,7 +413,7 @@ function buildPages(j, cfg) {
   }
   function page(first) {
     ops = []; pages.push(ops);
-    if (!first) { T(nombre, M, 18, 10, {bold: 1}); T('Presupuesto ' + numero, R, 18, 9, {align: 'right', color: mute}); Rc(M, 21, W, 0.8, ac); y = 28; return; }
+    if (!first) { T(nombre, M, 18, 10, {bold: 1}); T((j.tituloCorto || 'Presupuesto') + ' ' + numero, R, 18, 9, {align: 'right', color: mute}); Rc(M, 21, W, 0.8, ac); y = 28; return; }
     const k = 24 / 200, mx = M, my = 13;
     const mp = pts => pts.map(q => [mx + q[0] * k, my + q[1] * k]);
     ops.push({t: 'poly', pts: mp(MARK.gear), color: ink});
@@ -413,9 +423,9 @@ function buildPages(j, cfg) {
     let ns = 20; const nw = tw(nombre, ns, true); if (nw > 82) ns = ns * 82 / nw;
     T(nombre, 45, 25, ns, {bold: 1});
     if (cfg.leyenda) T(String(cfg.leyenda).toUpperCase(), 45, 31, 8.5, {color: mute});
-    T('PRESUPUESTO', R, 23, 15, {bold: 1, align: 'right'});
-    const px = R - tw('PRESUPUESTO', 15, true) - 13;
-    Rc(px, 15.5, 9.5, 9.5, ink); T('P', px + 4.75, 23, 15, {bold: 1, color: white, align: 'center'});
+    T(TIT, R, 23, 15, {bold: 1, align: 'right'});
+    const px = R - Math.max(tw(TIT, 15, true), twPdf(TIT, 15, true)) - 13;
+    Rc(px, 15.5, 9.5, 9.5, ink); T(LET, px + 4.75, LET.length > 1 ? 21.8 : 23, LET.length > 1 ? 10 : 15, {bold: 1, color: white, align: 'center'});
     T('N.º ' + numero, R, 30, 11, {align: 'right'});
     Rc(M, 41, W, 1.2, ac);
     y = 51;
@@ -423,15 +433,15 @@ function buildPages(j, cfg) {
     y += 2;
     const bx = M, bw = W, c = j.cliente || {}, L = [];
     wrap(c.razon || '', 12, true, bw - 8).forEach(l => L.push([l, 12, true, ink, 5.6]));
-    [['CUIT', c.cuit], ['Tel.', c.tel], ['Dirección', c.dir]].forEach(p => { if (p[1]) wrap(p[0] + ': ' + p[1], 9, false, bw - 8).forEach(l => L.push([l, 9, false, mute, 4.6])); });
+    [['CUIT', c.cuit], ['Tel.', c.tel], ['Correo', c.email], ['Dirección', c.dir]].forEach(p => { if (p[1]) wrap(p[0] + ': ' + p[1], 9, false, bw - 8).forEach(l => L.push([l, 9, false, mute, 4.6])); });
     wrap('Fecha: ' + fechaLarga(j.fecha), 9, false, bw - 8).forEach(l => L.push([l, 9, false, ink, 4.6]));
     const bh = 9 + L.reduce((a, l) => a + l[4], 0) + 2;
     Rc(bx, y, bw, bh, soft);
-    T('CLIENTE', bx + 4, y + 5, 7.5, {bold: 1, color: mute});
+    T(j.caja || 'CLIENTE', bx + 4, y + 5, 7.5, {bold: 1, color: mute});
     let cy = y + 5;
     L.forEach(l => { cy += l[4]; T(l[0], bx + 4, cy, l[1], {bold: l[2], color: l[3]}); });
     y += bh + 9;
-    if (cfg.saludo) { wrap(cfg.saludo, 9.5, false, W).forEach(l => { T(l, M, y, 9.5); y += 4.8; }); y += 3; }
+    if (cfg.saludo && !j.sinSaludo) { wrap(cfg.saludo, 9.5, false, W).forEach(l => { T(l, M, y, 9.5); y += 4.8; }); y += 3; }
   }
   page(true); tableHead();
   j.items.forEach(it => {
@@ -606,7 +616,7 @@ async function pintarAdjuntos(box, job) {
   }
 }
 let PV = null;
-const fileName = j => ('PTO ' + parseInt(j.pv, 10) + '-' + parseInt(j.num, 10) + ' ' + j.cliente.razon).replace(/[\\/:*?"<>|]/g, '').trim() + '.pdf';
+const fileName = j => j.archivo || (('PTO ' + parseInt(j.pv, 10) + '-' + parseInt(j.num, 10) + ' ' + j.cliente.razon).replace(/[\\/:*?"<>|]/g, '').trim() + '.pdf');
 function paint(box, job) {
   box.innerHTML = '';
   buildPages(job, S.cfg).forEach((ops, i) => { const cv = document.createElement('canvas'); cv.setAttribute('role', 'img'); cv.setAttribute('aria-label', 'Página ' + (i + 1) + ' del presupuesto'); drawCanvas(cv, ops); box.appendChild(cv); });
@@ -801,6 +811,7 @@ function viewCfg() {
     (x ? '<div class="hint">Se encontraron ' + x.length + ' clientes. Primeros renglones:</div><div class="tbl"><table><tr><th>Razón social</th><th>CUIT</th><th>Teléfono</th><th>Dirección</th></tr>' + x.slice(0, 5).map(r => '<tr><td>' + esc(r.razon) + '</td><td>' + esc(r.cuit) + '</td><td>' + esc(r.tel) + '</td><td>' + esc(r.dir) + '</td></tr>').join('') + '</table></div><div class="btns"><button class="btn pri sm" data-act="xlsx-ok">Importar ' + x.length + ' clientes</button><button class="btn sm" data-act="xlsx-no">Cancelar</button></div>' : '') +
     (f ? '<div class="row">' + inp('Razón social o nombre', 'cli.razon', f.razon) + '<div class="g2">' + inp('CUIT', 'cli.cuit', f.cuit) + inp('Teléfono', 'cli.tel', f.tel) + '</div>' + inp('Dirección', 'cli.dir', f.dir) + '<div class="btns"><button class="btn pri sm" data-act="cli-ok">Guardar cliente</button><button class="btn sm" data-act="cli-no">Cancelar</button></div></div>' : '<button class="btn sm" data-act="cli-add">Agregar cliente a mano</button>') +
     S.clientes.map(k => '<div class="cli"><div><b>' + esc(k.razon) + '</b><small>' + esc([k.cuit, k.tel, k.dir].filter(Boolean).join(' · ')) + '</small></div><div class="btns" style="flex-wrap:nowrap"><button class="btn sm" data-act="cli-edit" data-id="' + k.id + '">Editar</button><button class="ico" data-act="cli-del" data-id="' + k.id + '" aria-label="Eliminar cliente">' + TRASH + '</button></div></div>').join('') + '</div>' +
+    viewProv() +
     (fbUser ? '<div class="card"><h2>Cuenta</h2><div class="hint">Sesión iniciada como ' + esc(fbUser.email || fbUser.displayName || '') + '.' + (ws && ws.compartido ? ' Estás viendo el taller que compartió ' + esc(inv ? inv.ownerEmail : '') + ': lo que cargues acá lo ve esa cuenta también.' : ' Tus datos se guardan en tu cuenta y se ven en cualquier dispositivo donde entres.') + '</div>' +
       (ws && ws.compartido ? '<button class="btn sm" data-act="ws-propio">Volver a mi propia cuenta</button>' : (inv ? '<div class="hint"><b>' + esc(inv.ownerEmail || '') + '</b> compartió su taller con vos.</div><button class="btn sm pri" data-act="ws-comp">Ver el taller compartido</button>' : '')) +
       '<div class="btns"><button class="btn sm" data-act="sync">Sincronizar ahora</button><button class="btn sm danger" data-act="logout">Cerrar sesión</button></div></div>' +
@@ -814,12 +825,13 @@ function viewCfg() {
 }
 function render() {
   const v = D.ui.v;
-  $('#view').innerHTML = v === 'cot' ? viewCot() : v === 'his' ? viewHis() : v === 'cfg' ? viewCfg() : v === 'met' ? viewMet() : viewPre();
+  $('#view').innerHTML = v === 'oc' ? viewOc() : v === 'cot' ? viewCot() : v === 'his' ? viewHis() : v === 'cfg' ? viewCfg() : v === 'met' ? viewMet() : viewPre();
   document.querySelectorAll('.tab').forEach(t => { if (t.dataset.v === v) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current'); });
   const a = $('#acts');
   a.hidden = !(v === 'cot' || v === 'pre');
   a.innerHTML = v === 'cot' ? '<button class="btn sm pri" data-act="tab" data-v="pre">Ver presupuesto</button><button class="btn sm" data-act="cot-save">Guardar</button><button class="btn sm" data-act="cot-new">Nuevo</button>'
     : v === 'pre' ? '<button class="btn sm pri" data-act="pre-share">Compartir</button><button class="btn sm" data-act="pre-down">Descargar</button><button class="btn sm" data-act="tab" data-v="cot">Editar</button>' : '';
+  if (v === 'oc') { ocActs(a); recalcOc(); }
   if (v === 'cot') recalcCot();
   if (v === 'pre') { const sh = $('#sheet'); if (sh) { const jj = jobFromCot(D.cot); paint(sh, jj); pintarAdjuntos(sh, jj); } }
 }
@@ -853,7 +865,9 @@ function upsertCliente(c) {
   if (ex) Object.assign(ex, d); else S.clientes.push(Object.assign({id: uid()}, d));
   return true;
 }
-function readXlsx(file) {
+/* Lee un Excel de clientes (tipo vacío) o de proveedores (tipo 'prov') y muestra los primeros renglones para confirmar */
+function readXlsx(file, tipo) {
+  const key = tipo === 'prov' ? 'xlsxProv' : 'xlsx', nombre = tipo === 'prov' ? 'proveedores' : 'clientes';
   if (!window.XLSX) return toast('No se pudo cargar el lector de Excel. Revisá la conexión.');
   const fr = new FileReader();
   fr.onload = () => {
@@ -863,11 +877,11 @@ function readXlsx(file) {
       if (!rows.length) return toast('La planilla está vacía.');
       const h = rows[0].map(c => String(c).toLowerCase());
       const find = re => h.findIndex(c => re.test(c));
-      let ci = {razon: find(/raz|nombre|cliente|empresa/), cuit: find(/cuit|cuil|dni/), tel: find(/tel|cel|whats|contacto/), dir: find(/dir|domic/)}, data = rows.slice(1);
-      if (ci.razon < 0) { ci = {razon: 0, cuit: 1, tel: 2, dir: 3}; data = rows; }
+      let ci = {razon: find(/raz|nombre|cliente|proveedor|empresa/), cuit: find(/cuit|cuil|dni/), tel: find(/tel|cel|whats/), email: find(/mail|correo/), dir: find(/direc|domic/)}, data = rows.slice(1);
+      if (ci.razon < 0) { ci = tipo === 'prov' ? {razon: 0, cuit: 1, tel: 2, email: 3, dir: 4} : {razon: 0, cuit: 1, tel: 2, email: -1, dir: 3}; data = rows; }
       const get = (r, i) => (i >= 0 && r[i] != null) ? String(r[i]).trim() : '';
-      D.ui.xlsx = data.map(r => ({razon: get(r, ci.razon), cuit: get(r, ci.cuit), tel: get(r, ci.tel), dir: get(r, ci.dir)})).filter(r => r.razon);
-      if (!D.ui.xlsx.length) { D.ui.xlsx = null; return toast('No se encontraron clientes en la planilla.'); }
+      D.ui[key] = data.map(r => ({razon: get(r, ci.razon), cuit: get(r, ci.cuit), tel: get(r, ci.tel), email: get(r, ci.email), dir: get(r, ci.dir)})).filter(r => r.razon);
+      if (!D.ui[key].length) { D.ui[key] = null; return toast('No se encontraron ' + nombre + ' en la planilla.'); }
       render();
     } catch (e) { toast('No se pudo leer el archivo. Tiene que ser un Excel (.xlsx).'); }
   };
@@ -881,12 +895,14 @@ function readBackup(file) {
       if (!o || !o.cfg || !Array.isArray(o.trabajos)) throw 0;
       const viejos = S.trabajos.map(t => t.id), viejasC = S.cotizaciones.map(t => t.id);
       S.cfg = Object.assign({}, CFG0, o.cfg); S.clientes = o.clientes || []; S.trabajos = o.trabajos; S.cotizaciones = o.cotizaciones || [];
+      if (Array.isArray(o.proveedores)) S.proveedores = o.proveedores; if (Array.isArray(o.ordenes)) S.ordenes = o.ordenes;
       applyBrand(); render(); toast('Copia restaurada.');
       await persist('cfg'); await persist('clientes');
       for (const id of viejos) if (!S.trabajos.some(t => t.id === id)) await persist('trabajos', id, true);
       for (const id of viejasC) if (!S.cotizaciones.some(t => t.id === id)) await persist('cotizaciones', id, true);
       for (const t of S.trabajos) await persist('trabajos', t.id);
       for (const c of S.cotizaciones) await persist('cotizaciones', c.id);
+      await persist('proveedores'); for (const x of S.ordenes) await persist('ordenes', x.id);
     } catch (e) { toast('Ese archivo no es una copia de seguridad de esta app.'); }
   };
   fr.readAsText(file);
@@ -985,9 +1001,11 @@ document.addEventListener('input', e => {
   else if (m === 'ui.q') { const l = $('#hisList'); if (l) l.innerHTML = hisList(); }
   else if (m === 'cfg.accent' || m === 'cfg.razon') applyBrand();
   if (root === 'cot') { D.ui.skipAsk = false; saveLocal(); }
+  ocInput(m);
 });
 document.addEventListener('change', e => {
   const el = e.target, m = el.dataset.m;
+  if (ocChange(el, m)) return;
   if (el.id === 'fileXlsx' && el.files[0]) return readXlsx(el.files[0]);
   if (el.id === 'fileBackup' && el.files[0]) return readBackup(el.files[0]);
   if (el.id === 'fileAdj' && el.files.length) {
@@ -1019,7 +1037,189 @@ document.addEventListener('change', e => {
   if (m === 'cot.pv') { D.cot.pv = pad(el.value, 4); el.value = D.cot.pv; }
   if (m === 'cot.num') { D.cot.num = pad(el.value, 6); el.value = D.cot.num; }
 });
-function boot2() { if (!D.cot) D.cot = newCot(); if (!D.cot.adj) D.cot.adj = []; applyBrand(); render(); }
+/* ============ Órdenes de compra ============ */
+const OC_EST = [['emitida', 'Emitida', 'presupuestado'], ['recibida', 'Recibida', 'terminado'], ['pagada', 'Pagada', 'cobrado']];
+const ocEst = e => OC_EST.find(x => x[0] === e) || OC_EST[0];
+/* Número AAMMNN: año y mes de la fecha de la orden + correlativo del mes (vuelve a 01 cada mes) */
+function ocNum(fecha, exceptoId) {
+  const f = String(fecha || today()), pre = f.slice(2, 4) + f.slice(5, 7);
+  let max = 0;
+  S.ordenes.forEach(o => { if (o.id !== exceptoId && String(o.num).slice(0, 4) === pre) max = Math.max(max, parseInt(String(o.num).slice(4), 10) || 0); });
+  return pre + String(max + 1).padStart(2, '0');
+}
+const newOcItem = () => ({desc: '', cant: '', unit: ''});
+const newOc = () => ({id: null, num: ocNum(today()), manual: false, fecha: today(), prov: {razon: '', cuit: '', tel: '', email: '', dir: ''}, items: [newOcItem()], obs: ''});
+const ocItemTot = it => r2(parseNum(it.cant) * parseNum(it.unit));
+const ocTotal = o => r2(o.items.reduce((a, it) => a + ocItemTot(it), 0));
+const ocVacia = o => !o.id && !o.prov.razon && !o.obs && !o.items.some(it => String(it.desc).trim() || ocItemTot(it) > 0);
+/* Convierte la orden al formato que usa el armado del PDF del presupuesto */
+function ocJob(o) {
+  const items = o.items.filter(it => String(it.desc).trim() || ocItemTot(it) > 0).map(it => ({desc: String(it.desc).trim(), cant: parseNum(it.cant), unit: parseNum(it.unit), total: ocItemTot(it)}));
+  const total = r2(items.reduce((a, i) => a + i.total, 0));
+  return {pv: '', num: o.num, numero: o.num, titulo: 'ORDEN DE COMPRA', tituloCorto: 'Orden de compra', letra: 'OC', caja: 'PROVEEDOR', sinSaludo: true,
+    archivo: ('OC ' + o.num + ' ' + o.prov.razon).replace(/[\\/:*?"<>|]/g, '').trim() + '.pdf',
+    fecha: o.fecha, cliente: clone(o.prov), items, iva: false, sub: total, ivaMonto: 0, total, obs: o.obs, adj: []};
+}
+/* Lee de la nube proveedores y órdenes (o sube los del dispositivo si la nube está vacía) */
+async function syncCompras() {
+  if (!db) return;
+  try {
+    const r = await Promise.all([db.doc('ajustes/proveedores').get(), todos(db.collection('ordenes'))]);
+    const rP = r[0].exists ? (clone(r[0].data()).lista || []) : [], rO = r[1].docs.map(d => clone(d.data()));
+    if (rP.length || rO.length) { S.proveedores = rP; S.ordenes = rO; saveLocal(); }
+    else if (S.proveedores.length || S.ordenes.length) { await persist('proveedores'); for (const o of S.ordenes) await persist('ordenes', o.id); }
+    if (D.oc && ocVacia(D.oc)) D.oc = newOc();
+  } catch (e) { toast('No se pudieron leer las órdenes de compra de la nube.'); }
+}
+/* Guarda la orden que se está cargando */
+function saveOc(silent) {
+  const o = D.oc;
+  if (!o.prov.razon.trim()) { toast('Falta el proveedor.'); return null; }
+  if (!(ocTotal(o) > 0)) { toast('Cargá al menos un ítem con cantidad y precio.'); return null; }
+  if (!o.id && !o.manual) o.num = ocNum(o.fecha);
+  if (S.ordenes.some(x => x.num === o.num && x.id !== o.id)) { toast('Ya existe la orden ' + o.num + '. Cambiá el número.'); return null; }
+  const datos = {num: o.num, fecha: o.fecha, prov: clone(o.prov), items: clone(o.items.filter(it => String(it.desc).trim() || ocItemTot(it) > 0)), obs: o.obs, total: ocTotal(o)};
+  let t = o.id ? S.ordenes.find(x => x.id === o.id) : null;
+  if (t) Object.assign(t, datos);
+  else { t = Object.assign({id: uid(), estado: 'emitida', hist: [{e: 'emitida', f: today()}]}, datos); S.ordenes.push(t); o.id = t.id; }
+  persist('ordenes', t.id);
+  if (!silent) { toast('Orden guardada.'); render(); }
+  return t;
+}
+function upsertProv(p) {
+  const dig = s => String(s || '').replace(/\D/g, ''), razon = String(p.razon || '').trim();
+  if (!razon) return false;
+  const ex = S.proveedores.find(k => (p.id && k.id === p.id) || (dig(p.cuit) && dig(k.cuit) === dig(p.cuit)) || k.razon.trim().toLowerCase() === razon.toLowerCase());
+  const d = {razon, cuit: String(p.cuit || '').trim(), tel: String(p.tel || '').trim(), email: String(p.email || '').trim(), dir: String(p.dir || '').trim()};
+  if (ex) Object.assign(ex, d); else S.proveedores.push(Object.assign({id: uid()}, d));
+  return true;
+}
+const provDe = k => ({razon: k.razon, cuit: k.cuit || '', tel: k.tel || '', email: k.email || '', dir: k.dir || ''});
+/* Pestaña Compras: nueva orden, listado y proveedores */
+function viewOc() {
+  const vista = D.ui.ocVista || 'form', chip = (v, txt) => '<button class="chip" data-act="oc-vista" data-v="' + v + '" aria-pressed="' + (vista === v) + '">' + txt + '</button>';
+  return '<h1>' + (vista === 'form' && D.oc.id ? 'Orden de compra · editando ' + esc(D.oc.num) : 'Compras') + '</h1><div class="chips">' +
+    chip('form', D.oc.id ? 'Editando orden' : 'Nueva orden') + chip('lista', 'Órdenes (' + S.ordenes.length + ')') + '</div>' +
+    (vista === 'lista' ? viewOcLista() : viewOcForm());
+}
+function viewOcForm() {
+  const o = D.oc, p = o.prov;
+  const item = (it, i) => '<div class="row"><div class="row-top">' + inp('Descripción', 'oc.items.' + i + '.desc', it.desc, 'placeholder="Ej.: barra SAE 1045 Ø50 x 1 m"') +
+    '<button class="ico" data-act="oc-del-row" data-i="' + i + '" aria-label="Quitar ítem" style="margin-top:22px">' + TRASH + '</button></div><div class="g3">' +
+    numInp('Cantidad', 'oc.items.' + i + '.cant', it.cant) + numInp('P. unitario', 'oc.items.' + i + '.unit', it.unit) +
+    '<div class="f"><span>P. total</span><div class="out" data-out="oc' + i + '">' + money(ocItemTot(it)) + '</div></div></div></div>';
+  return '<div class="card"><div class="g2">' + inp('Número', 'oc.num', o.num, 'inputmode="numeric" class="num"') + inp('Fecha', 'oc.fecha', o.fecha, 'type="date"') + '</div><div class="hint">Se arma solo: año, mes y número de orden del mes.</div></div>' +
+    '<div class="card"><h2>Proveedor</h2>' + inp('Razón social o nombre', 'oc.prov.razon', p.razon, 'list="dlProv" autocomplete="off" placeholder="Escribí para buscar en tus proveedores"') +
+    '<datalist id="dlProv">' + S.proveedores.map(x => '<option value="' + esc(x.razon) + '"></option>').join('') + '</datalist>' +
+    (S.proveedores.length ? '<label class="f"><span>O elegilo de la lista completa</span><select id="selProv" data-chg="provSel"><option value="">Ver todos mis proveedores (' + S.proveedores.length + ')</option>' +
+      S.proveedores.slice().sort((a, b) => a.razon.localeCompare(b.razon)).map(x => '<option value="' + x.id + '">' + esc(x.razon) + '</option>').join('') + '</select></label>' : '') +
+    '<div class="g2">' + inp('CUIT', 'oc.prov.cuit', p.cuit, 'inputmode="numeric"') + inp('Teléfono', 'oc.prov.tel', p.tel, 'inputmode="tel"') + '</div>' +
+    inp('Correo', 'oc.prov.email', p.email, 'type="email" inputmode="email" autocomplete="off"') + inp('Dirección', 'oc.prov.dir', p.dir) +
+    '<button class="btn sm" data-act="prov-from-oc">Guardar en mis proveedores</button><div class="hint">La lista completa de proveedores se edita en Configuración.</div></div>' +
+    '<div class="card"><h2>Ítems</h2>' + o.items.map(item).join('') + '<button class="btn sm" data-act="oc-add-row">Agregar ítem</button><div class="sum" id="ocSum"></div></div>' +
+    '<div class="card"><h2>Observaciones</h2><label class="f"><span>Salen al pie de la orden</span><textarea id="i-oc-obs" data-m="oc.obs" rows="2">' + esc(o.obs) + '</textarea></label></div>';
+}
+function recalcOc() {
+  if (!D.oc) return;
+  D.oc.items.forEach((it, i) => { const el = $('[data-out="oc' + i + '"]'); if (el) el.textContent = money(ocItemTot(it)); });
+  const s = $('#ocSum'), n = D.oc.items.filter(it => ocItemTot(it) > 0).length;
+  if (s) s.innerHTML = '<div><span>Ítems con precio</span><span>' + n + '</span></div><div class="big"><span>Total</span><span>' + money(ocTotal(D.oc)) + '</span></div>';
+}
+function viewOcLista() {
+  if (!S.ordenes.length) return '<div class="card empty">Acá van a aparecer las órdenes que guardes. Cada una entra como “Emitida” y desde acá la pasás a “Recibida” y “Pagada”.</div>';
+  const sum = e => money(S.ordenes.filter(o => o.estado === e).reduce((a, o) => a + (o.total || 0), 0));
+  return '<div class="kpis"><div class="kpi"><span>Emitido sin recibir</span><b>' + sum('emitida') + '</b></div><div class="kpi"><span>Recibido sin pagar</span><b>' + sum('recibida') + '</b></div><div class="kpi"><span>Pagado</span><b>' + sum('pagada') + '</b></div></div>' +
+    '<label class="f"><span>Buscar por proveedor o número</span><input id="i-ui-ocQ" data-m="ui.ocQ" value="' + esc(D.ui.ocQ || '') + '" type="search"></label>' +
+    '<div id="ocList" style="display:flex;flex-direction:column;gap:12px">' + ocListaItems() + '</div>';
+}
+function ocListaItems() {
+  const q = String(D.ui.ocQ || '').trim().toLowerCase();
+  const L = S.ordenes.filter(o => !q || (o.prov.razon + ' ' + o.num).toLowerCase().includes(q)).sort((a, b) => String(b.num).localeCompare(String(a.num)));
+  if (!L.length) return '<div class="card empty">Ninguna orden coincide con la búsqueda.</div>';
+  return L.map(o => {
+    const e = ocEst(o.estado);
+    return '<details class="job" data-id="' + o.id + '"' + (D.ui.open[o.id] ? ' open' : '') + '><summary><div class="job-l1"><b>' + esc(o.prov.razon) + '</b><span>' + money(o.total) + '</span></div>' +
+      '<div class="job-l2"><span>OC ' + esc(o.num) + ' · ' + fechaCorta(o.fecha) + '</span><span class="estado"><span class="dot" style="background:var(--e-' + e[2] + ')"></span>' + e[1] + '</span></div></summary>' +
+      '<div class="job-body"><div class="items">' + o.items.map(i => '<div><span>' + esc(i.desc) + (parseNum(i.cant) ? ' (' + qty(parseNum(i.cant)) + ')' : '') + '</span><span>' + money(ocItemTot(i)) + '</span></div>').join('') + '</div>' +
+      '<label class="f"><span>Estado</span><select id="ocest-' + o.id + '" data-chg="ocEstado" data-id="' + o.id + '">' + OC_EST.map(x => '<option value="' + x[0] + '"' + (x[0] === o.estado ? ' selected' : '') + '>' + x[1] + '</option>').join('') + '</select></label>' +
+      '<div class="hint">' + (o.hist || []).map(h => ocEst(h.e)[1] + ' ' + fechaCorta(h.f)).join(' → ') + '</div>' + (o.obs ? '<div class="hint">Obs.: ' + esc(o.obs) + '</div>' : '') +
+      '<div class="btns"><button class="btn sm pri" data-act="oc-pdf" data-id="' + o.id + '">Ver PDF</button><button class="btn sm" data-act="oc-edit" data-id="' + o.id + '">Editar</button><button class="btn sm danger" data-act="oc-del" data-id="' + o.id + '">Eliminar</button></div></div></details>';
+  }).join('');
+}
+function viewProv() {
+  const f = D.prov, x = D.ui.xlsxProv;
+  return '<div class="card"><h2>Proveedores (' + S.proveedores.length + ')</h2><label class="f"><span>Importar desde Excel (.xlsx) con columnas: razón social, CUIT, teléfono, correo, dirección</span><input type="file" id="fileXlsxProv" accept=".xlsx,.xls,.csv"></label>' +
+    (x ? '<div class="hint">Se encontraron ' + x.length + ' proveedores. Primeros renglones:</div><div class="tbl"><table><tr><th>Razón social</th><th>CUIT</th><th>Teléfono</th><th>Correo</th></tr>' + x.slice(0, 5).map(r => '<tr><td>' + esc(r.razon) + '</td><td>' + esc(r.cuit) + '</td><td>' + esc(r.tel) + '</td><td>' + esc(r.email) + '</td></tr>').join('') + '</table></div><div class="btns"><button class="btn pri sm" data-act="xlsxp-ok">Importar ' + x.length + ' proveedores</button><button class="btn sm" data-act="xlsxp-no">Cancelar</button></div>' : '') +
+    (f ? '<div class="row">' + inp('Razón social o nombre', 'prov.razon', f.razon) + '<div class="g2">' + inp('CUIT', 'prov.cuit', f.cuit, 'inputmode="numeric"') + inp('Teléfono', 'prov.tel', f.tel, 'inputmode="tel"') + '</div>' +
+      inp('Correo', 'prov.email', f.email, 'type="email" inputmode="email" autocomplete="off"') + inp('Dirección', 'prov.dir', f.dir) +
+      '<div class="btns"><button class="btn pri sm" data-act="prov-ok">Guardar proveedor</button><button class="btn sm" data-act="prov-no">Cancelar</button></div></div>' : '<button class="btn sm" data-act="prov-add">Agregar proveedor a mano</button>') +
+    S.proveedores.slice().sort((a, b) => a.razon.localeCompare(b.razon)).map(k => '<div class="cli"><div><b>' + esc(k.razon) + '</b><small>' + esc([k.cuit, k.tel, k.email, k.dir].filter(Boolean).join(' · ')) + '</small></div><div class="btns" style="flex-wrap:nowrap"><button class="btn sm" data-act="prov-edit" data-id="' + k.id + '">Editar</button><button class="ico" data-act="prov-del" data-id="' + k.id + '" aria-label="Eliminar proveedor">' + TRASH + '</button></div></div>').join('') + '</div>';
+}
+/* Botones fijos de arriba en la pestaña Compras */
+function ocActs(a) {
+  const form = (D.ui.ocVista || 'form') === 'form';
+  a.hidden = !form;
+  a.innerHTML = form ? '<button class="btn sm pri" data-act="oc-ver">Ver PDF</button><button class="btn sm" data-act="oc-save">Guardar</button><button class="btn sm" data-act="oc-new">Nueva</button>' : '';
+}
+function openOcPreview(o) {
+  PV = {job: ocJob(o), oc: o};
+  paint($('#modalB'), PV.job);
+  $('#modalT').textContent = 'Orden de compra ' + o.num;
+  $('#btnMail').hidden = false; $('#modal').hidden = false; $('#modalB').scrollTop = 0;
+}
+/* Mail: en el teléfono abre el menú de compartir con el PDF adjunto; en la PC descarga el PDF y abre el correo armado */
+async function mailOc(o) {
+  const job = ocJob(o), name = job.archivo;
+  let blob;
+  try { blob = makePdf(buildPages(job, S.cfg), name.replace(/\.pdf$/, '')); } catch (e) { return toast('No se pudo generar el PDF. Revisá la conexión y volvé a intentar.'); }
+  const asunto = 'Orden de compra ' + o.num + ' - ' + (S.cfg.razon || ''), cuerpo = 'Hola, les enviamos la orden de compra N.º ' + o.num + ' por un total de ' + money(o.total) + '.\n\nSaludos,\n' + (S.cfg.firmante || S.cfg.razon || '');
+  const file = new File([blob], name, {type: 'application/pdf'});
+  try { if (/Android|iPhone|iPad/i.test(navigator.userAgent) && navigator.canShare && navigator.canShare({files: [file]})) { await navigator.share({files: [file], title: asunto, text: cuerpo}); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
+  if (!(await saveFile(name, blob))) return;
+  location.href = 'mailto:' + String(o.prov.email || '').trim() + '?subject=' + encodeURIComponent(asunto) + '&body=' + encodeURIComponent(cuerpo);
+  toast('Se descargó el PDF: adjuntalo en el correo que se abrió.');
+}
+/* Cambios en los campos de Compras. Devuelve true si ya se ocupó. */
+function ocChange(el, m) {
+  const chg = el.dataset.chg;
+  if (el.id === 'fileXlsxProv' && el.files[0]) { readXlsx(el.files[0], 'prov'); el.value = ''; return true; }
+  if (chg === 'provSel') { const k = S.proveedores.find(p => p.id === el.value); if (k) { D.oc.prov = provDe(k); render(); saveLocal(); } return true; }
+  if (chg === 'ocEstado') { const o = S.ordenes.find(x => x.id === el.dataset.id); if (o) { o.estado = el.value; o.hist = (o.hist || []).concat([{e: el.value, f: today()}]); D.ui.open[o.id] = true; persist('ordenes', o.id); render(); } return true; }
+  if (m === 'oc.fecha') { if (!D.oc.id && !D.oc.manual) { D.oc.num = ocNum(D.oc.fecha); render(); } saveLocal(); return true; }
+  if (m === 'oc.num') { D.oc.num = String(el.value).replace(/\D/g, ''); D.oc.manual = true; el.value = D.oc.num; saveLocal(); return true; }
+  if (m === 'oc.prov.razon') { const k = S.proveedores.find(p => p.razon.trim().toLowerCase() === el.value.trim().toLowerCase()); if (k) { D.oc.prov = provDe(k); render(); saveLocal(); } return true; }
+  return false;
+}
+/* Mientras se escribe en Compras */
+function ocInput(m) {
+  if (m.indexOf('oc.') === 0) { recalcOc(); saveLocal(); }
+  else if (m === 'ui.ocQ') { const l = $('#ocList'); if (l) l.innerHTML = ocListaItems(); }
+}
+Object.assign(ACT, {
+  'oc-vista': b => { D.ui.ocVista = b.dataset.v; render(); window.scrollTo(0, 0); },
+  'oc-add-row': () => { D.oc.items.push(newOcItem()); render(); saveLocal(); },
+  'oc-del-row': b => { D.oc.items.splice(+b.dataset.i, 1); if (!D.oc.items.length) D.oc.items.push(newOcItem()); render(); saveLocal(); },
+  'oc-save': () => { saveOc(false); },
+  'oc-new': b => { if (!ocVacia(D.oc) && !armed(b)) return; D.oc = newOc(); render(); window.scrollTo(0, 0); saveLocal(); },
+  'oc-ver': () => { const o = saveOc(true); if (o) openOcPreview(o); },
+  'oc-pdf': b => { const o = S.ordenes.find(x => x.id === b.dataset.id); if (o) openOcPreview(o); },
+  'oc-edit': b => { const o = S.ordenes.find(x => x.id === b.dataset.id); if (o) { D.oc = Object.assign(newOc(), clone(o), {manual: true}); D.ui.ocVista = 'form'; render(); window.scrollTo(0, 0); saveLocal(); } },
+  'oc-del': b => { if (!armed(b)) return; S.ordenes = S.ordenes.filter(x => x.id !== b.dataset.id); if (D.oc.id === b.dataset.id) D.oc.id = null; persist('ordenes', b.dataset.id, true); render(); },
+  'prov-from-oc': () => { if (upsertProv(D.oc.prov)) { persist('proveedores'); toast('Proveedor guardado.'); render(); } else toast('Escribí primero el nombre del proveedor.'); },
+  'prov-add': () => { D.prov = {id: null, razon: '', cuit: '', tel: '', email: '', dir: ''}; render(); },
+  'prov-edit': b => { const k = S.proveedores.find(x => x.id === b.dataset.id); if (k) { D.prov = Object.assign({email: ''}, clone(k)); render(); const e = $('#i-prov-razon'); if (e) e.focus(); } },
+  'prov-ok': () => { if (!upsertProv(D.prov)) return toast('Falta el nombre del proveedor.'); D.prov = null; persist('proveedores'); render(); },
+  'prov-no': () => { D.prov = null; render(); },
+  'prov-del': b => { if (!armedIco(b)) return; S.proveedores = S.proveedores.filter(x => x.id !== b.dataset.id); persist('proveedores'); render(); },
+  'xlsxp-ok': () => { let n = 0; D.ui.xlsxProv.forEach(r => { if (upsertProv(r)) n++; }); D.ui.xlsxProv = null; persist('proveedores'); render(); toast('Se importaron ' + n + ' proveedores.'); },
+  'xlsxp-no': () => { D.ui.xlsxProv = null; render(); },
+  'pdf-mail': () => { if (PV && PV.oc) mailOc(PV.oc); },
+  /* Estas tres reemplazan a las versiones anteriores: suman las órdenes y los proveedores */
+  'modal-close': () => { $('#modal').hidden = true; $('#btnMail').hidden = true; PV = null; },
+  'sync': async () => { const ok = await syncRemote(ws && ws.uid, !!ws && !ws.compartido); if (ok) await syncCompras(); render(); toast(ok ? 'Datos sincronizados.' : 'No se pudo sincronizar. Revisá la conexión.'); },
+  'backup': async () => { await saveFile('TallerdeFedeApp copia ' + today() + '.json', new Blob([JSON.stringify({cfg: S.cfg, clientes: S.clientes, trabajos: S.trabajos, cotizaciones: S.cotizaciones, proveedores: S.proveedores, ordenes: S.ordenes}, null, 1)], {type: 'application/json'})); }
+});
+function boot2() { if (!D.cot) D.cot = newCot(); if (!D.oc || (ocVacia(D.oc) && D.oc.fecha !== today())) D.oc = newOc(); if (!D.cot.adj) D.cot.adj = []; applyBrand(); render(); }
 loadLocal(); boot2(); connectDb();
 </script>
 </body>
